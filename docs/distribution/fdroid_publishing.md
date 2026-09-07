@@ -25,9 +25,11 @@ F-Droid builds all applications directly from source using their build servers. 
 
 ---
 
-## ⚙️ F-Droid Build Configuration (`com.opscalehub.slim.yml`)
+## ⚙️ F-Droid Build Configuration (`io.github.playfoundryhq.slim.yml`)
 
-This YAML metadata file is submitted to the F-Droid metadata repository (`fdroiddata`). It instructs F-Droid's build bot on how to compile our APK.
+This YAML metadata file is submitted to the F-Droid metadata repository (`fdroiddata`); its name must match the app's `applicationId`. Slim's id is `io.github.playfoundryhq.slim` — the reverse-DNS of the project's GitHub Pages site (`playfoundryhq.github.io`), which is F-Droid's recommended id form for a project without its own domain. (It was `com.opscalehub.slim` before 1.5.0.)
+
+It instructs F-Droid's build bot on how to compile our APK.
 
 ```yaml
 Categories:

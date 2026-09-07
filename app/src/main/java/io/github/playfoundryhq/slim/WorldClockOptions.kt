@@ -1,4 +1,4 @@
-package com.opscalehub.slim
+package io.github.playfoundryhq.slim
 
 /**
  * Curated list of cities offered for the optional secondary "world clock".

@@ -100,7 +100,7 @@ Slim is built in the open by **PlayFoundryHQ** and community contributors. No co
 
 *   🐛 Found a bug? [Open an issue](https://github.com/PlayFoundryHQ/Slim/issues)
 *   💡 Have a feature idea? [Start a discussion](https://github.com/PlayFoundryHQ/Slim/issues/new)
-*   ✉️ Contact: **lcommonid@gmail.com**
+*   ✉️ Contact: **opscale.solution@gmail.com**
 
 ---
 

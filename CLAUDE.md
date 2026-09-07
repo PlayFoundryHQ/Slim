@@ -9,11 +9,11 @@ This file is loaded automatically by Claude Code. Read it before touching any co
 Slim is a minimalist Android launcher (home-replacement app). It is the primary system entry point on the device — every app-switch, screen-wake, and Back gesture goes through it. This makes stability and focus-chain correctness far more critical than in a normal app.
 
 Key files:
-- `app/src/main/java/com/opscalehub/slim/MainActivity.kt` — single Activity; owns the full UI, lifecycle, and window management
-- `app/src/main/java/com/opscalehub/slim/WidgetHostManager.kt` — hosts the one home-screen widget
-- `app/src/main/java/com/opscalehub/slim/AppRepository.kt` — app list; refreshes via `LauncherApps`
-- `app/src/main/java/com/opscalehub/slim/SlimPreferences.kt` — typed SharedPreferences wrapper
-- `app/src/main/java/com/opscalehub/slim/WaveGestureView.kt` — custom alphabet-scrubber view
+- `app/src/main/java/io/github/playfoundryhq/slim/MainActivity.kt` — single Activity; owns the full UI, lifecycle, and window management
+- `app/src/main/java/io/github/playfoundryhq/slim/WidgetHostManager.kt` — hosts the one home-screen widget
+- `app/src/main/java/io/github/playfoundryhq/slim/AppRepository.kt` — app list; refreshes via `LauncherApps`
+- `app/src/main/java/io/github/playfoundryhq/slim/SlimPreferences.kt` — typed SharedPreferences wrapper
+- `app/src/main/java/io/github/playfoundryhq/slim/WaveGestureView.kt` — custom alphabet-scrubber view
 - `docs/architecture/` — human + agent architecture docs; keep in sync with code changes
 
 ---
@@ -53,6 +53,7 @@ Do not remove this block. Do not move it to `onStop` — by then the window is a
 - **Widget binding uses the system picker** — Slim does not hold `BIND_APPWIDGET`. The picker binds on the user's behalf. Do not add `BIND_APPWIDGET` to the manifest.
 - **`INTERNET` permission is opt-in only** — used exclusively by the real-weather path. It must never be called on a cold start or without explicit user opt-in.
 - **Home Activity is never finished** — `finish()` must never be called from `MainActivity`. The process can be killed by the system, but the Activity itself must stay alive.
+- **`applicationId` is `io.github.playfoundryhq.slim`** — renamed from `com.opscalehub.slim` in 1.5.0 (the PlayFoundryHQ move). It matches the `namespace`, the Kotlin package, and the F-Droid metadata filename; keep all four in lockstep. Changing it again produces a different app with no in-place upgrade path, so don't.
 - **The launch theme starts opaque black** — `Theme.Slim` sets an opaque `windowBackground` (`@color/bg_dark`) and is **not** `windowIsTranslucent`. The default background mode is solid black; `applyBackgroundMode()` opts back into the wallpaper at runtime (via `FLAG_SHOW_WALLPAPER`) for the transparent/dimmed modes. Do not restore `windowIsTranslucent` / `windowShowWallpaper` in the theme — a translucent activity gets no starting window, which reintroduced the cold-start wallpaper flash.
 - **`onNewIntent` resets to a clean home** — `MainActivity` is `singleTask`, so a Home press while Slim is already foreground arrives via `onNewIntent`, not `onCreate`. It must dismiss the focus screen, close search, exit alphabet mode, and scroll the list to the top.
 - **No lock screen; the focus screen is a gesture, not a wake hook** — Slim never runs over the keyguard and never weakens Android's secure lock. The "focus screen" (Settings → Appearance, opt-in, off by default) is only a black clock veil (`R.id.focusVeil`) drawn inside `MainActivity`'s own window, raised by long-pressing `txtClock` and dismissed by tap / swipe-up. It is deliberately **not** tied to screen-off / unlock — a launcher can't reliably paint at wake time (the OS may have killed it) and can't draw over the secure keyguard. No new Activity, no window flags, no `FLAG_SHOW_WHEN_LOCKED`, no service, no new permission.
