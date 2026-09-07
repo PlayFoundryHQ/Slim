@@ -1,4 +1,4 @@
-package com.opscalehub.slim
+package io.github.playfoundryhq.slim
 
 import android.app.role.RoleManager
 import android.content.Context

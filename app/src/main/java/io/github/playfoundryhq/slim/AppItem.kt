@@ -1,4 +1,4 @@
-package com.opscalehub.slim
+package io.github.playfoundryhq.slim
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey

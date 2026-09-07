@@ -343,7 +343,7 @@
     </LinearLayout>
 
     <!-- Alphabet scrubber (right edge) -->
-    <com.opscalehub.slim.WaveGestureView
+    <io.github.playfoundryhq.slim.WaveGestureView
         android:id="@+id/waveGestureView"
         android:layout_width="48dp"
         android:layout_height="0dp"

@@ -1,4 +1,4 @@
-package com.opscalehub.slim
+package io.github.playfoundryhq.slim
 
 import org.junit.Assert.assertEquals
 import org.junit.Test

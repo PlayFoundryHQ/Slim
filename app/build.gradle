@@ -5,15 +5,20 @@ plugins {
 }
 
 android {
-    namespace 'com.opscalehub.slim'
+    namespace 'io.github.playfoundryhq.slim'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.opscalehub.slim"
+        // Reverse-DNS of the project's GitHub Pages site (playfoundryhq.github.io),
+        // the F-Droid-recommended id form for a project without its own domain.
+        // Renamed from com.opscalehub.slim in 1.5.0 when the project moved to the
+        // PlayFoundryHQ org; the new id is a distinct app, so existing sideload
+        // installs must be uninstalled and reinstalled (no in-place update path).
+        applicationId "io.github.playfoundryhq.slim"
         minSdk 26
         targetSdk 34
-        versionCode 6
-        versionName "1.4.0"
+        versionCode 7
+        versionName "1.5.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

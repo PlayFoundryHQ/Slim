@@ -1,4 +1,4 @@
-package com.opscalehub.slim
+package io.github.playfoundryhq.slim
 
 import android.content.ComponentName
 import android.content.Context

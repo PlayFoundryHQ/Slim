@@ -16,7 +16,7 @@
 #
 set -euo pipefail
 
-PKG="com.opscalehub.slim"
+PKG="io.github.playfoundryhq.slim"
 MAIN="$PKG/.MainActivity"
 LISTENER="$PKG/$PKG.SlimNotificationListener"
 

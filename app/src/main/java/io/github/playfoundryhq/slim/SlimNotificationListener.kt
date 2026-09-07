@@ -1,4 +1,4 @@
-package com.opscalehub.slim
+package io.github.playfoundryhq.slim
 
 import android.app.Notification
 import android.graphics.Bitmap
