@@ -95,6 +95,13 @@ Slim Launcher is designed with a strict MVVM (Model-View-ViewModel) pattern usin
 +--------------------------------------------------------+
 ```
 
+> [!NOTE] Current implementation
+> The diagram above is the intended target shape. As implemented, there is **no
+> `HomeViewModel`** — `MainActivity` owns the home UI state directly and observes
+> the Room `Flow`s (`allAppsFlow`, `favoritesFlow`) through `lifecycleScope`.
+> `NotificationRegistry` is a process-wide `object`, not a repository type.
+> Extracting a ViewModel is a valid future refactor but is not a correctness gap.
+
 ### Data Flow Principles:
 1. **Unidirectional Data Flow (UDF)**: The UI fires events (e.g., app launched, search query changed) to the `HomeViewModel`. The ViewModel updates state flows which the UI observes.
 2. **Offline Caching**: App lists, search indexes, and custom tag mappings are cached in a SQLite database via **Room**. If `LauncherApps` broadcast indicates package install/removal, the Room cache updates asynchronously.
@@ -151,6 +158,42 @@ When the search panel is open and the screen turns off (or power button is press
 The `post{}` deferral is essential — firing `showSoftInput` before the window has re-acquired input focus races with WM on aggressive OEM ROMs (ColorOS / Oplus Hans) and silently no-ops or triggers the "no focused window" ANR.
 
 ---
+
+## 🖼️ Startup & Transition Visuals
+
+- **Opaque launch theme.** `Theme.Slim` uses an opaque `windowBackground`
+  (`@color/bg_dark`) and is **not** `windowIsTranslucent`. A translucent activity
+  is given no starting window, so before this the first frames of every cold
+  start showed the system wallpaper (theme had `windowShowWallpaper=true`) until
+  `onResume` → `applyBackgroundMode()` flipped the window to black — a wallpaper
+  flash on the default configuration. The opaque black starting window is
+  invisible against the content that follows. The wallpaper-backed background
+  modes still work: `applyBackgroundMode()` adds `FLAG_SHOW_WALLPAPER` at
+  runtime, which composites the wallpaper behind the non-opaque window
+  background without a translucent window.
+- **`onNewIntent` reset.** `MainActivity` is `singleTask`; a Home press while
+  Slim is already foreground is delivered to `onNewIntent`, which returns the UI
+  to a clean home state (dismiss focus screen, close search, exit alphabet mode,
+  scroll to top). `onResume` cannot do this alone — it also runs on ordinary
+  resumes where the scroll position should be preserved.
+
+## 🌑 Focus Screen & the Keyguard Boundary
+
+The optional focus screen (Settings → Appearance) is **not** a lock screen and
+does not interact with Android's secure Keyguard in any way. It is a `View`
+(`R.id.focusVeil`) inside `MainActivity`'s window, raised by long-pressing
+`txtClock` and dismissed by tap / swipe-up.
+
+| Behaviour | Third-party launcher? | Slim's choice |
+|---|---|---|
+| Replace / theme the secure Keyguard | ❌ Requires system/privileged app | Not attempted |
+| Draw over the Keyguard (`FLAG_SHOW_WHEN_LOCKED`) | ⚠️ Only for non-secure keyguard; discouraged for a Home activity and a known focus-race source | Not used |
+| Paint a screen automatically at wake / after unlock | ⚠️ Unreliable — an OEM process killer may have killed Slim while the screen was off; verified marginal on a OnePlus test device | Not used |
+| A screen the user raises by a gesture while Slim is foreground | ✅ It is just your own window | **This is the focus screen** |
+
+No new permission, no service, no wake lock, no window-flag mutation, no
+broadcast receiver. Updated by the existing `clockTickRunnable`; raised only by
+an explicit long-press on the clock.
 
 ## 🔋 Performance & Memory Constraints
 

@@ -1,10 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Slim" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Make background transparent to show system wallpaper -->
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:windowShowWallpaper">true</item>
-        <item name="android:windowIsTranslucent">true</item>
+        <!-- Opaque black starting window. The default background mode is
+             BG_SOLID_BLACK, and applyBackgroundMode() opts back into the
+             wallpaper at runtime for the transparent/dimmed modes. Starting
+             transparent+showWallpaper here meant every cold start briefly
+             painted the system wallpaper before onResume flipped the window
+             to black — a wallpaper flash on the default configuration. A black
+             first frame is invisible against the (black) content that follows;
+             for the wallpaper modes it is a far less jarring transition than
+             wallpaper -> black -> content. -->
+        <item name="android:windowBackground">@color/bg_dark</item>
+        <item name="android:windowShowWallpaper">false</item>
+        <!-- Deliberately NOT windowIsTranslucent: a translucent activity gets no
+             starting window at all (so the previous app / wallpaper shows until
+             the first frame), which is exactly the flash we are removing. The
+             wallpaper-backed modes (transparent / dimmed) work through
+             FLAG_SHOW_WALLPAPER, added at runtime by setShowWallpaper() — that
+             flag composites the wallpaper behind any non-opaque region of the
+             window background without needing a translucent window. -->
         <!-- Translucent status and navigation bars -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

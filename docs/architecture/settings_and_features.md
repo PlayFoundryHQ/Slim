@@ -45,6 +45,7 @@ All options are stored in `SharedPreferences` (`slim_launcher_prefs`) behind a t
 | `show_app_icons` | Boolean | `true` | Show icons vs. text-only minimal list |
 | `background_mode` | String | `solid_black` | `transparent` / `dimmed` / `solid_black` window background |
 | `immersive_mode` | Boolean | `false` | Hide status bar; show notification count + battery in header |
+| `focus_screen` | Boolean | `false` | Focus screen — long-press the clock to blank home down to a clock |
 | `swipe_up_search` | Boolean | `true` | Enable/disable the swipe-up search gesture |
 | `swipe_down_notifications` | Boolean | `true` | Swipe down to open the system notification shade |
 | `comm_notifications_only` | Boolean | `true` | Surface only communication notifications on home |
@@ -120,6 +121,45 @@ The launcher draws directly on the system wallpaper, so readability is handled a
 6. The Favorites section fades progressively toward the bottom of that section (`AppListAdapter.FAVORITE_FADE_STEP`/`FAVORITE_FADE_FLOOR`), a purely decorative touch applied per-row in `onBindViewHolder`. `appRecyclerView.itemAnimator` is disabled — RecyclerView's default item animator runs its own alpha fade on every item-change update and resets alpha to 1 when it finishes, which was silently clobbering this effect on any list rebuild (notification events, icon/color toggles, app refresh).
 7. In-app dialogs (long-press menu, rename, hidden apps) use `Theme.Slim.Dialog`, matching the app's own dark surface palette (`surface_elevated`/`border_color`) instead of the stock light Material dialog chrome.
 
+## 🌑 Focus Screen
+
+*Settings → Appearance → Focus screen* (opt-in, **off by default** — so the
+long-press does nothing until you turn it on).
+
+When enabled, **long-pressing the home-screen clock** drops a full-screen black
+veil (`R.id.focusVeil` in `activity_main.xml`) over everything, showing only a
+large clock, the date (if `show_date` is on), and a notification count (if any).
+A tap or an upward swipe brings the home screen back; Back dismisses it before
+any other home state; a Home press dismisses it via `onNewIntent`.
+
+### Why it's a gesture and not a lock/wake screen
+
+Slim is an ordinary third-party launcher. It **cannot**:
+
+- replace or theme Android's secure Keyguard, or draw anything over it;
+- reliably paint a screen at wake time — an aggressive OEM (OnePlus/Oppo "Hans",
+  etc.) may have killed Slim's process while the screen was off, so on unlock it
+  just cold-starts to the normal home screen.
+
+An earlier iteration armed the veil from an `ACTION_SCREEN_OFF` receiver; on a
+OnePlus test device it was confirmed to show only in the narrow case where
+Slim's process survived the screen-off *and* the user unlocked straight back to
+the home screen — unreliable enough to be misleading. A gesture the user
+performs while Slim is already foreground is the only version of the idea that
+always works.
+
+So the focus screen:
+
+- is a plain `View` inside `MainActivity`'s own window — no new Activity, no
+  `FLAG_SHOW_WHEN_LOCKED` / `setShowWhenLocked`, no window-flag mutation, no
+  service, no wake lock, no new permission;
+- is raised only by an explicit long-press on `txtClock`, and updated by the
+  existing `clockTickRunnable` — no periodic work beyond the clock tick that
+  already runs while Slim is resumed.
+
+It is a self-imposed "blank the phone down to a clock, right now" toggle,
+implemented within what the platform actually allows.
+
 ## 🔔 Corner Status Row
 
 The notification-count and battery chips (immersive mode only) live in their own `statusInfoRow`, anchored to the top-right corner of the screen independent of the header column — not stacked as a row under the clock/date, which would take vertical space away from the clock. It clears the status bar inset the same way the header does (`setupWindowInsets()` pads both).
@@ -135,7 +175,11 @@ The notification-count and battery chips (immersive mode only) live in their own
 | Horizontal swipe | Alphabet browsing | Return to favorites |
 | Back press | Search open | Close search |
 | Back press | Alphabet browsing | Return to favorites |
+| Long-press clock | Home, focus screen enabled | Raise the focus screen veil |
+| Tap / swipe up | Focus screen visible | Dismiss the veil |
+| Back press | Focus screen visible | Dismiss the veil (before any other home state) |
 | Back press | Home (favorites) state | **Nothing** — the home screen is the bottom of the nav stack and never finishes |
+| Home press | Slim already foreground | `onNewIntent`: dismiss focus screen, close search, exit alphabet mode, scroll list to top |
 | Long-press app | Any list | Options: favorite, rename, hide |
 
 > [!NOTE] Back never exits the launcher
