@@ -176,6 +176,18 @@
             android:textColor="@color/text_muted"
             android:textSize="12sp" />
 
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchFocusScreen"
+            style="@style/SettingsSwitch"
+            android:text="@string/settings_focus_screen" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_focus_screen_summary"
+            android:textColor="@color/text_muted"
+            android:textSize="12sp" />
+
         <TextView
             android:id="@+id/btnHiddenApps"
             style="@style/SettingsActionRow"

@@ -138,6 +138,10 @@ class SettingsActivity : AppCompatActivity() {
         switchImmersive.isChecked = prefs.immersiveMode
         switchImmersive.setOnCheckedChangeListener { _, checked -> prefs.immersiveMode = checked }
 
+        val switchFocusScreen = findViewById<SwitchMaterial>(R.id.switchFocusScreen)
+        switchFocusScreen.isChecked = prefs.focusScreenEnabled
+        switchFocusScreen.setOnCheckedChangeListener { _, checked -> prefs.focusScreenEnabled = checked }
+
         findViewById<TextView>(R.id.btnHiddenApps).setOnClickListener {
             showHiddenAppsDialog()
         }

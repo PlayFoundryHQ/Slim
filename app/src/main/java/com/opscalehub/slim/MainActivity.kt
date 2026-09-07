@@ -54,6 +54,8 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         // tick until one succeeded — that self-inflicted hammering is what
         // tripped Open-Meteo's "too many requests" limit and left it stuck.
         private const val WEATHER_RETRY_INTERVAL_MS = 60_000L
+        // Minimum gap between onResume-triggered app-list refreshes.
+        private const val RESUME_REFRESH_INTERVAL_MS = 60_000L
     }
 
     private lateinit var appRecyclerView: RecyclerView
@@ -73,6 +75,10 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     private lateinit var statusInfoRow: View
     private lateinit var txtNotificationSummary: TextView
     private lateinit var txtBattery: TextView
+    private lateinit var focusVeil: View
+    private lateinit var txtFocusClock: TextView
+    private lateinit var txtFocusDate: TextView
+    private lateinit var txtFocusNotif: TextView
     private var packageChangeReceiver: BroadcastReceiver? = null
     private var batteryReceiver: BroadcastReceiver? = null
     private var batteryReceiverRegistered = false
@@ -124,6 +130,12 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     // Last time we *attempted* a real-weather fetch (success or failure), used
     // to throttle retries so a failing endpoint doesn't get hammered.
     private var lastWeatherAttemptTime = 0L
+    // Last time onResume kicked a full app refresh. Package install/remove comes
+    // in through PackageChangeReceiver, so the only job of the onResume refresh
+    // is to catch the rare case the broadcast was missed (Slim not registered
+    // yet during a fast install). Doing the refresh + its two retries on every
+    // single Home press was a LauncherApps query storm on the hot resume path.
+    private var lastResumeRefreshTime = 0L
     private val handler = Handler(Looper.getMainLooper())
     private val returnToFavoritesRunnable = Runnable {
         exitAlphabetMode()
@@ -164,6 +176,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
             txtClock.text = (if (prefs.use24HourFormat) clockTime24Format else clockTime12Format).format(now)
             txtDate.text = clockDateFormat.format(now)
             updateWorldClockText()
+            updateFocusScreenText()
             // Weather has its own 60s cache; no need to check on every tick.
             if (++clockTicks % 60 == 0) updateWeather()
             handler.postDelayed(this, 1000)
@@ -192,6 +205,11 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         statusInfoRow = findViewById(R.id.statusInfoRow)
         txtNotificationSummary = findViewById(R.id.txtNotificationCount)
         txtBattery = findViewById(R.id.txtBattery)
+        focusVeil = findViewById(R.id.focusVeil)
+        txtFocusClock = findViewById(R.id.txtFocusClock)
+        txtFocusDate = findViewById(R.id.txtFocusDate)
+        txtFocusNotif = findViewById(R.id.txtFocusNotif)
+        setupFocusScreen()
 
         setupWindowInsets()
 
@@ -314,6 +332,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
+                    focusVeil.visibility == View.VISIBLE -> dismissFocusScreen()
                     searchPanel.visibility == View.VISIBLE -> hideSearchBar()
                     isAlphabetScrubbing -> exitAlphabetMode()
                     else -> { /* At home root: consume and stay. */ }
@@ -351,6 +370,98 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         val receiver = PackageChangeReceiver { scheduleAppRefresh() }
         packageChangeReceiver = receiver
         registerReceiver(receiver, PackageChangeReceiver.createIntentFilter())
+    }
+
+    /**
+     * The focus screen is a plain black View inside our own window — no window
+     * flags, no new Activity, no keyguard interaction, no service. It is a
+     * deliberate "blank everything down to a clock" toggle: long-press the
+     * clock to raise it, tap or swipe up to dismiss.
+     *
+     * It is intentionally NOT tied to screen-off / unlock. A launcher cannot
+     * reliably paint anything at wake time — the OS may have killed Slim while
+     * the screen was off, and it certainly cannot draw over the secure
+     * keyguard. A gesture the user performs while Slim is already foreground is
+     * the only version of this idea that always works.
+     */
+    private fun setupFocusScreen() {
+        txtClock.setOnLongClickListener {
+            if (prefs.focusScreenEnabled) {
+                showFocusScreen()
+                true
+            } else {
+                false
+            }
+        }
+        val veilGestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onSingleTapUp(e: MotionEvent): Boolean {
+                dismissFocusScreen(); return true
+            }
+            override fun onFling(
+                e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float
+            ): Boolean {
+                if ((e1?.y ?: 0f) - e2.y > swipeUpDistanceThresholdPx) {
+                    dismissFocusScreen(); return true
+                }
+                return false
+            }
+        })
+        focusVeil.setOnTouchListener { v, ev ->
+            veilGestures.onTouchEvent(ev)
+            if (ev.action == MotionEvent.ACTION_UP) v.performClick()
+            true
+        }
+    }
+
+    private fun showFocusScreen() {
+        if (focusVeil.visibility == View.VISIBLE) return
+        updateFocusScreenText()
+        focusVeil.alpha = 1f
+        focusVeil.visibility = View.VISIBLE
+    }
+
+    private fun dismissFocusScreen() {
+        if (focusVeil.visibility != View.VISIBLE) return
+        focusVeil.animate().alpha(0f).setDuration(200)
+            .withEndAction { focusVeil.visibility = View.GONE }
+            .start()
+    }
+
+    private fun updateFocusScreenText() {
+        if (focusVeil.visibility != View.VISIBLE) return
+        val now = Date()
+        txtFocusClock.text =
+            (if (prefs.use24HourFormat) clockTime24Format else clockTime12Format).format(now)
+        txtFocusDate.visibility = if (prefs.showDate) View.VISIBLE else View.GONE
+        txtFocusDate.text = clockDateFormat.format(now)
+        val count = NotificationRegistry.getNotificationCount()
+        if (count > 0) {
+            txtFocusNotif.visibility = View.VISIBLE
+            txtFocusNotif.text = "🔔 $count"
+        } else {
+            txtFocusNotif.visibility = View.GONE
+        }
+    }
+
+    /**
+     * A HOME intent redelivered to the already-running launcher (Home pressed
+     * while Slim is foreground). singleTask means this arrives here rather than
+     * as a fresh onCreate, so the "return to a clean home" reset has to live
+     * here — onResume alone left the alphabet list scrolled wherever the user
+     * last scrubbed to.
+     */
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        // onNewIntent fires before onResume on a singleTask relaunch. onPause has
+        // already run and, if search was open with the keyboard up, set
+        // imeWasOpenBeforePause = true — which would make onResume re-summon the
+        // keyboard over the now-empty home. Clear it and force the panel closed
+        // synchronously so onResume's "panel still visible?" check is false.
+        imeWasOpenBeforePause = false
+        dismissFocusScreen()  // Home press always returns to the plain app list
+        if (searchPanel.visibility == View.VISIBLE) hideSearchBar()
+        searchPanel.visibility = View.GONE
+        if (isAlphabetScrubbing) exitAlphabetMode() else appRecyclerView.scrollToPosition(0)
     }
 
     /**
@@ -492,8 +603,14 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         adapter.setShowIcons(prefs.showAppIcons)
         searchAdapter.setShowIcons(prefs.showAppIcons)
         updateWeather()
-        // Pick up newly installed/removed apps — with retry for timing (F-Droid etc.)
-        scheduleAppRefresh()
+        // Pick up newly installed/removed apps — with retry for timing (F-Droid etc.).
+        // Throttled: PackageChangeReceiver is the real-time path, this is only a
+        // safety net, so it need not fire on every Home press.
+        val now = System.currentTimeMillis()
+        if (now - lastResumeRefreshTime > RESUME_REFRESH_INTERVAL_MS) {
+            lastResumeRefreshTime = now
+            scheduleAppRefresh()
+        }
 
         // Restore search-panel state after a pause.
         //
@@ -771,6 +888,11 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     // ---- Touch & gestures ----
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // While the focus screen is up it owns every touch — let it route to the
+        // veil's own OnTouchListener (tap / swipe-up to dismiss) and skip the
+        // home-screen gesture processing below, so dismissing it doesn't also
+        // fire swipe-up-for-search on the list underneath.
+        if (focusVeil.visibility == View.VISIBLE) return super.dispatchTouchEvent(ev)
         if (ev.action == MotionEvent.ACTION_DOWN) {
             lastDownX = ev.getX(0)
             lastDownY = ev.getY(0)
@@ -901,7 +1023,8 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         handler.removeCallbacks(refreshRetry1)
         handler.removeCallbacks(refreshRetry2)
         NotificationRegistry.unregisterListener()
-        packageChangeReceiver?.let { unregisterReceiver(it) }
+        packageChangeReceiver?.let { runCatching { unregisterReceiver(it) } }
+        (packageChangeReceiver as? PackageChangeReceiver)?.destroy()
         batteryReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         batteryReceiverRegistered = false
     }

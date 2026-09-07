@@ -64,6 +64,9 @@
     <string name="settings_background_dimmed">Dim wallpaper</string>
     <string name="settings_background_solid_black">Solid black</string>
 
+    <string name="settings_focus_screen">Focus screen</string>
+    <string name="settings_focus_screen_summary">Long-press the clock to blank the home screen down to just a clock — tap or swipe up to bring it back. Not a lock screen: it never replaces or weakens Android\'s PIN / pattern / biometric security, and never appears over the system lock screen.</string>
+
     <string name="settings_immersive_mode">Immersive full-screen</string>
     <string name="settings_immersive_mode_summary">Hide status bar — clock, notifications, and battery shown in launcher header instead</string>
 

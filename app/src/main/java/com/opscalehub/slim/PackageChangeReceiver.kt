@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
@@ -34,9 +35,10 @@ class PackageChangeReceiver(
         }
     }
 
-    /** Releases the coroutine scope; call from onDestroy. */
+    /** Cancels the receiver's coroutine scope so a pending refresh can't outlive
+     *  the Activity that registered it. Call from onDestroy. */
     fun destroy() {
-        // Cancelling the scope prevents leaks but lets in-flight refreshes finish.
+        scope.cancel()
     }
 
     companion object {

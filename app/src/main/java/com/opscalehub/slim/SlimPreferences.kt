@@ -116,6 +116,20 @@ class SlimPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_IMMERSIVE_MODE, false)
         set(value) = prefs.edit().putBoolean(KEY_IMMERSIVE_MODE, value).apply()
 
+    /**
+     * Focus screen: long-pressing the home-screen clock drops a black
+     * clock-only veil over everything, dismissed by a tap or a swipe up. Off by
+     * default (so the long-press does nothing until enabled). It is a
+     * self-imposed "blank the phone down to a clock" toggle drawn inside Slim's
+     * own window — NOT a lock screen: it does not run over the keyguard, shows
+     * no protected content, and does not touch Android's secure lock. It is a
+     * deliberate gesture, never tied to screen-off / unlock (a launcher cannot
+     * reliably paint anything at wake time, nor over the secure keyguard).
+     */
+    var focusScreenEnabled: Boolean
+        get() = prefs.getBoolean(KEY_FOCUS_SCREEN, false)
+        set(value) = prefs.edit().putBoolean(KEY_FOCUS_SCREEN, value).apply()
+
     // ---- Widget ----
     /**
      * The single app-widget id currently bound to Slim's home screen, or
@@ -210,5 +224,6 @@ class SlimPreferences(context: Context) {
         private const val KEY_BACKGROUND_MODE = "background_mode"
         private const val KEY_IMMERSIVE_MODE = "immersive_mode"
         private const val KEY_WIDGET_ID = "widget_id"
+        private const val KEY_FOCUS_SCREEN = "focus_screen"
     }
 }
