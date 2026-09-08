@@ -83,6 +83,16 @@ class WidgetHostManager(
         val widthDp = availableWidthDp()
         val heightDp = naturalHeightDp(info)
 
+        // Publish the slot size to the provider BEFORE creating the view.
+        // Jetpack Glance widgets (GitHub's contributions, Slack's unreads/status,
+        // and a growing share of modern widgets) open a sizing session on bind
+        // and, if they never receive a size, close it having produced only an
+        // error RemoteViews — the host then shows "Couldn't add widget". The
+        // deprecated AppWidgetHostView.updateAppWidgetSize() alone is not enough:
+        // Glance 1.1+ reads OPTION_APPWIDGET_SIZES (the List<SizeF>), which that
+        // path doesn't reliably populate. So set the options explicitly.
+        publishWidgetOptions(id, widthDp, heightDp)
+
         // Round every widget to the same silhouette regardless of its own corners.
         container.clipToOutline = true
         val lp = container.layoutParams
@@ -93,10 +103,6 @@ class WidgetHostManager(
         val hostView: AppWidgetHostView = host.createView(context, id, info)
         hostView.setAppWidget(id, info)
 
-        // Tell the widget the exact dp box it has so responsive widgets pick the
-        // right layout. The int overload is deprecated on API 31+ in favour of a
-        // List<SizeF>, but it's the simplest cross-version call for one slot and
-        // behaves identically here.
         @Suppress("DEPRECATION")
         hostView.updateAppWidgetSize(null, widthDp, heightDp, widthDp, heightDp)
 
@@ -111,6 +117,34 @@ class WidgetHostManager(
         )
         container.visibility = View.VISIBLE
         renderedWidgetId = id
+    }
+
+    /**
+     * Tell the provider the exact box it has, via both the legacy min/max ints
+     * and (API 31+) the [AppWidgetManager.OPTION_APPWIDGET_SIZES] list that
+     * Glance-based widgets actually read. Safe to call repeatedly; it never
+     * touches the host view, so it can't reopen the InputFlinger focus gap that
+     * recreating [AppWidgetHostView] would.
+     */
+    private fun publishWidgetOptions(id: Int, widthDp: Int, heightDp: Int) {
+        val options = android.os.Bundle().apply {
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, widthDp)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, widthDp)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, heightDp)
+            putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, heightDp)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                putParcelableArrayList(
+                    AppWidgetManager.OPTION_APPWIDGET_SIZES,
+                    arrayListOf(android.util.SizeF(widthDp.toFloat(), heightDp.toFloat()))
+                )
+            }
+        }
+        try {
+            widgetManager.updateAppWidgetOptions(id, options)
+        } catch (e: Exception) {
+            // Provider or id went away between the info lookup and here — render()
+            // self-heals on the next pass.
+        }
     }
 
     private fun hide() {
