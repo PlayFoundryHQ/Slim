@@ -145,13 +145,25 @@ class SlimPreferences(context: Context) {
 
     // ---- Widget ----
     /**
-     * The single app-widget id currently bound to Slim's home screen, or
-     * [NO_WIDGET] when none is set. Allocated by [WidgetHostManager]'s host and
-     * persisted here so the widget survives restarts and is re-rendered on launch.
+     * Ordered app-widget ids on Slim's home strip — the user swipes left/right
+     * between them. Empty list = no widget. Allocated by an [AppWidgetHost] with
+     * [WidgetHostManager.HOST_ID] and persisted as a comma-joined string so they
+     * survive restarts. A pre-1.6 single `widget_id` is migrated in on first read
+     * and then dropped.
      */
-    var widgetId: Int
-        get() = prefs.getInt(KEY_WIDGET_ID, NO_WIDGET)
-        set(value) = prefs.edit().putInt(KEY_WIDGET_ID, value).apply()
+    var widgetIds: List<Int>
+        get() {
+            val raw = prefs.getString(KEY_WIDGET_IDS, null)
+            if (raw != null) {
+                return raw.split(",").mapNotNull { it.toIntOrNull() }.filter { it != NO_WIDGET }
+            }
+            val legacy = prefs.getInt(KEY_WIDGET_ID, NO_WIDGET)
+            return if (legacy != NO_WIDGET) listOf(legacy) else emptyList()
+        }
+        set(value) = prefs.edit()
+            .putString(KEY_WIDGET_IDS, value.joinToString(","))
+            .remove(KEY_WIDGET_ID)
+            .apply()
 
     // ---- Gestures ----
     var swipeUpForSearch: Boolean
@@ -209,8 +221,11 @@ class SlimPreferences(context: Context) {
         const val WEATHER_SIMULATED = "simulated"
         const val WEATHER_REAL = "real"
 
-        /** Sentinel for [widgetId] when no widget is bound. Matches AppWidgetManager.INVALID_APPWIDGET_ID. */
+        /** Sentinel for an unset widget id. Matches AppWidgetManager.INVALID_APPWIDGET_ID. */
         const val NO_WIDGET = -1
+
+        /** Most widgets allowed on the swipeable home strip. */
+        const val MAX_WIDGETS = 5
 
         private const val KEY_SHOW_CLOCK = "show_clock"
         private const val KEY_SHOW_DATE = "show_date"
@@ -236,7 +251,8 @@ class SlimPreferences(context: Context) {
         private const val KEY_SHOW_APP_ICONS = "show_app_icons"
         private const val KEY_BACKGROUND_MODE = "background_mode"
         private const val KEY_IMMERSIVE_MODE = "immersive_mode"
-        private const val KEY_WIDGET_ID = "widget_id"
+        private const val KEY_WIDGET_ID = "widget_id"          // legacy single id (migrated)
+        private const val KEY_WIDGET_IDS = "widget_ids"        // comma-joined ordered list
         private const val KEY_FOCUS_SCREEN = "focus_screen"
         private const val KEY_DEFAULT_LAUNCHER_PROMPT_SHOWN = "default_launcher_prompt_shown"
     }
