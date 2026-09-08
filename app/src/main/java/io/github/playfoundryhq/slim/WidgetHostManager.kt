@@ -32,7 +32,19 @@ class WidgetHostManager(
 ) {
 
     private val widgetManager = AppWidgetManager.getInstance(context)
-    private val host = AppWidgetHost(context, HOST_ID)
+
+    // AppWidgetHostView inflates every widget's RemoteViews with the
+    // LayoutInflater of the context this host was built with. An Activity's
+    // inflater carries AppCompat's view-substitution factory, which silently
+    // rewrites each <ImageView> in the widget to AppCompatImageView — and
+    // RemoteViews then rejects setImageResource / setImageViewBitmap on that
+    // class ("can't use method with RemoteViews"), so the widget collapses to
+    // the "Couldn't add widget" error view. GitHub's contribution widget and
+    // Slack's widgets hit this; Duolingo's happens not to. The application
+    // context has no such factory and still carries Theme.Slim (declared on
+    // <application>), so day/night colours are still correct.
+    private val hostContext: Context = context.applicationContext
+    private val host = AppWidgetHost(hostContext, HOST_ID)
     private var renderedWidgetId = Int.MIN_VALUE  // sentinel: nothing rendered yet
 
     /** Begin receiving widget updates. Call from Activity.onStart. */
@@ -100,7 +112,7 @@ class WidgetHostManager(
         container.layoutParams = lp
 
         container.removeAllViews()
-        val hostView: AppWidgetHostView = host.createView(context, id, info)
+        val hostView: AppWidgetHostView = host.createView(hostContext, id, info)
         hostView.setAppWidget(id, info)
 
         @Suppress("DEPRECATION")
