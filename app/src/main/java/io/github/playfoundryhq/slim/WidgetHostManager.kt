@@ -73,25 +73,37 @@ class WidgetHostManager(
         }
     }
 
+    private var pageHeightsPx = IntArray(0)
+    private var heightAnimator: android.animation.ValueAnimator? = null
+
     /**
      * (Re)draws the widget strip, or hides the container when there are none.
-     * Self-heals if a widget's app was uninstalled (provider info goes null) by
-     * dropping that id from the persisted list.
+     * One widget fills the view at a time; a swipe snaps to the next
+     * ([WidgetPagerView]) and the strip height eases to that widget's own
+     * natural height.
      */
     fun render() {
+        // Only drop ids the host itself no longer knows (truly deallocated). A
+        // plain getAppWidgetInfo() == null is often transient — an OEM freezer
+        // briefly hides a just-added provider — and must NOT prune the list.
+        val knownToHost = host.appWidgetIds.toHashSet()
         val wanted = prefs.widgetIds
-        val live = wanted.filter { widgetManager.getAppWidgetInfo(it) != null }
-        if (live != wanted) prefs.widgetIds = live
-        if (live.isEmpty()) {
+        val pruned = wanted.filter { it in knownToHost }
+        if (pruned != wanted) prefs.widgetIds = pruned
+
+        val infos = pruned.mapNotNull { id ->
+            widgetManager.getAppWidgetInfo(id)?.let { id to it }
+        }
+        if (infos.isEmpty()) {
             hide()
             return
         }
-        if (live == renderedWidgetIds) return
+        val renderIds = infos.map { it.first }
+        if (renderIds == renderedWidgetIds) return
 
         val widthDp = availableWidthDp()
-        val built = ArrayList<Pair<AppWidgetHostView, Int>>(live.size)
-        for (id in live) {
-            val info = widgetManager.getAppWidgetInfo(id) ?: continue
+        val built = ArrayList<Pair<AppWidgetHostView, Int>>(infos.size)
+        for ((id, info) in infos) {
             val heightDp = naturalHeightDp(info)
             // Publish the size BEFORE creating the view: Jetpack Glance widgets
             // open a sizing session on bind and, with no size event, close it
@@ -105,14 +117,12 @@ class WidgetHostManager(
             hostView.updateAppWidgetSize(null, widthDp, heightDp, widthDp, heightDp)
             built.add(hostView to heightDp)
         }
-        if (built.isEmpty()) {
-            hide()
-            return
-        }
 
-        val stripHeightDp = built.maxOf { it.second }
         val multi = built.size > 1
+        val maxHeightPx = dpToPx(built.maxOf { it.second })
+        pageHeightsPx = IntArray(built.size) { dpToPx(built[it].second) }
 
+        heightAnimator?.cancel()
         container.removeAllViews()
         container.clipToOutline = true
 
@@ -128,17 +138,15 @@ class WidgetHostManager(
             )
             newPager.strip.addView(
                 page,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT)
             )
         }
+        // The pager is always the tallest page tall; the container clips it to
+        // the current page's height, which is what "eases" between widgets.
         container.addView(
             newPager,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(stripHeightDp)
-            ).apply { gravity = Gravity.TOP }
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, maxHeightPx)
+                .apply { gravity = Gravity.TOP }
         )
         pager = newPager
 
@@ -155,17 +163,46 @@ class WidgetHostManager(
                 }
             )
             dotRow = dots
-            newPager.onPageSettled = ::updateDots
             updateDots(0)
         } else {
             dotRow = null
         }
 
-        val lp = container.layoutParams
-        lp.height = dpToPx(stripHeightDp + if (multi) DOTS_STRIP_DP else 0)
-        container.layoutParams = lp
+        newPager.onPageSettled = { page ->
+            updateDots(page)
+            easeContainerTo(pageHeightsPx.getOrElse(page) { maxHeightPx }, multi)
+        }
+
+        setContainerHeight(pageHeightsPx.firstOrNull() ?: maxHeightPx, multi)
         container.visibility = View.VISIBLE
-        renderedWidgetIds = live
+        renderedWidgetIds = renderIds
+    }
+
+    private fun chromePx(multi: Boolean) = if (multi) dpToPx(DOTS_STRIP_DP) else 0
+
+    private fun setContainerHeight(pageHeightPx: Int, multi: Boolean) {
+        val lp = container.layoutParams
+        lp.height = pageHeightPx + chromePx(multi)
+        container.layoutParams = lp
+    }
+
+    private fun easeContainerTo(pageHeightPx: Int, multi: Boolean) {
+        val target = pageHeightPx + chromePx(multi)
+        val start = container.height
+        if (start == target || start <= 0) {
+            setContainerHeight(pageHeightPx, multi)
+            return
+        }
+        heightAnimator?.cancel()
+        heightAnimator = android.animation.ValueAnimator.ofInt(start, target).apply {
+            duration = 190
+            addUpdateListener { a ->
+                container.layoutParams = container.layoutParams.apply {
+                    height = a.animatedValue as Int
+                }
+            }
+            start()
+        }
     }
 
     /**
@@ -222,10 +259,12 @@ class WidgetHostManager(
     }
 
     private fun hide() {
+        heightAnimator?.cancel()
         container.removeAllViews()
         container.visibility = View.GONE
         pager = null
         dotRow = null
+        pageHeightsPx = IntArray(0)
         renderedWidgetIds = emptyList()
     }
 

@@ -43,17 +43,38 @@ class WidgetPagerView(context: Context) : HorizontalScrollView(context) {
         addView(strip)
     }
 
-    /** Re-stretch every page to the pager's own width when that changes. */
+    /**
+     * Force every page to exactly the pager's width at measure time. Doing it
+     * here (not in onSizeChanged) makes it independent of layout-pass ordering —
+     * the pages are `WRAP_CONTENT` until this runs, and a mis-timed stretch left
+     * each page sized to its widget's intrinsic width, so nothing snapped.
+     */
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        val w = measuredWidth
+        if (w <= 0) return
+        var changed = false
+        for (i in 0 until strip.childCount) {
+            val child = strip.getChildAt(i)
+            if (child.layoutParams.width != w) {
+                child.layoutParams =
+                    LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.MATCH_PARENT)
+                changed = true
+            }
+        }
+        if (changed) {
+            strip.measure(
+                MeasureSpec.makeMeasureSpec(w * pageCount, MeasureSpec.EXACTLY),
+                heightMeasureSpec
+            )
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        if (w == 0 || w == oldw) return
-        for (i in 0 until strip.childCount) {
-            strip.getChildAt(i).layoutParams =
-                LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.MATCH_PARENT)
-        }
-        strip.requestLayout()
         // Keep the current page aligned after a width change (e.g. rotation).
-        post { scrollTo(settledPage * w, 0) }
+        if (w != oldw && w > 0) post { scrollTo(settledPage * w, 0) }
     }
 
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
