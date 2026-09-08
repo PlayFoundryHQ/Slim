@@ -182,18 +182,46 @@ class SettingsActivity : AppCompatActivity() {
         val btnRemove = findViewById<TextView>(R.id.btnRemoveWidget)
 
         fun refresh() {
-            val hasWidget = prefs.widgetId != SlimPreferences.NO_WIDGET &&
-                widgetManager.getAppWidgetInfo(prefs.widgetId) != null
-            btnWidget.text = getString(
-                if (hasWidget) R.string.settings_change_widget else R.string.settings_add_widget
+            val live = liveWidgetIds()
+            val count = live.size
+            btnWidget.text = when {
+                count == 0 -> getString(R.string.settings_add_widget)
+                count >= SlimPreferences.MAX_WIDGETS -> getString(R.string.settings_widget_limit_reached)
+                else -> getString(R.string.settings_add_another_widget, count)
+            }
+            btnWidget.isEnabled = count < SlimPreferences.MAX_WIDGETS
+            btnWidget.alpha = if (btnWidget.isEnabled) 1f else 0.4f
+            btnRemove.visibility = if (count > 0) View.VISIBLE else View.GONE
+            btnRemove.text = getString(
+                if (count > 1) R.string.settings_remove_a_widget else R.string.settings_remove_widget
             )
-            btnRemove.visibility = if (hasWidget) View.VISIBLE else View.GONE
         }
         refreshWidgetRow = ::refresh
         refresh()
 
-        btnWidget.setOnClickListener { pickWidget() }
-        btnRemove.setOnClickListener { removeWidget() }
+        btnWidget.setOnClickListener { if (btnWidget.isEnabled) pickWidget() }
+        btnRemove.setOnClickListener { promptRemoveWidget() }
+    }
+
+    /** Persisted widget ids whose provider is still installed, in order. */
+    private fun liveWidgetIds(): List<Int> =
+        prefs.widgetIds.filter { widgetManager.getAppWidgetInfo(it) != null }
+
+    private fun widgetLabel(id: Int): String =
+        widgetManager.getAppWidgetInfo(id)?.loadLabel(packageManager) ?: "Widget $id"
+
+    private fun promptRemoveWidget() {
+        val ids = liveWidgetIds()
+        if (ids.isEmpty()) return
+        if (ids.size == 1) {
+            removeWidget(ids[0]); return
+        }
+        val labels = ids.map { widgetLabel(it) }.toTypedArray()
+        AlertDialog.Builder(this, R.style.Theme_Slim_Dialog)
+            .setTitle(R.string.settings_remove_widget)
+            .setItems(labels) { _, which -> removeWidget(ids[which]) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     /** Opens the system widget picker, reserving a fresh host id for the choice. */
@@ -214,8 +242,8 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     /**
-     * Replaces any existing widget with [id] and persists it so MainActivity
-     * renders it. Only one widget slot exists, so the previous one is released.
+     * Appends [id] to the widget strip and persists it so MainActivity renders
+     * it. Ids already present are moved to the end rather than duplicated.
      */
     private fun finishWidgetSetup(id: Int) {
         // Guard against a picker that returned an unbound id (some OEM pickers
@@ -225,21 +253,20 @@ class SettingsActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.settings_widget_pick_failed, Toast.LENGTH_LONG).show()
             return
         }
-        val previous = prefs.widgetId
-        if (previous != SlimPreferences.NO_WIDGET && previous != id) {
-            widgetHost.deleteAppWidgetId(previous)
+        val current = liveWidgetIds().filter { it != id }
+        if (current.size >= SlimPreferences.MAX_WIDGETS) {
+            widgetHost.deleteAppWidgetId(id)
+            Toast.makeText(this, R.string.settings_widget_limit_reached, Toast.LENGTH_LONG).show()
+            return
         }
-        prefs.widgetId = id
+        prefs.widgetIds = current + id
         refreshWidgetRow?.invoke()
         Toast.makeText(this, R.string.settings_widget_added, Toast.LENGTH_SHORT).show()
     }
 
-    private fun removeWidget() {
-        val id = prefs.widgetId
-        if (id != SlimPreferences.NO_WIDGET) {
-            widgetHost.deleteAppWidgetId(id)
-        }
-        prefs.widgetId = SlimPreferences.NO_WIDGET
+    private fun removeWidget(id: Int) {
+        widgetHost.deleteAppWidgetId(id)
+        prefs.widgetIds = prefs.widgetIds.filter { it != id }
         refreshWidgetRow?.invoke()
         Toast.makeText(this, R.string.settings_widget_removed, Toast.LENGTH_SHORT).show()
     }

@@ -10,7 +10,7 @@ Slim is a minimalist Android launcher (home-replacement app). It is the primary 
 
 Key files:
 - `app/src/main/java/io/github/playfoundryhq/slim/MainActivity.kt` — single Activity; owns the full UI, lifecycle, and window management
-- `app/src/main/java/io/github/playfoundryhq/slim/WidgetHostManager.kt` — hosts the one home-screen widget
+- `app/src/main/java/io/github/playfoundryhq/slim/WidgetHostManager.kt` — hosts the home-screen widget strip (1–5, swiped via `WidgetPagerView`)
 - `app/src/main/java/io/github/playfoundryhq/slim/AppRepository.kt` — app list; refreshes via `LauncherApps`
 - `app/src/main/java/io/github/playfoundryhq/slim/SlimPreferences.kt` — typed SharedPreferences wrapper
 - `app/src/main/java/io/github/playfoundryhq/slim/WaveGestureView.kt` — custom alphabet-scrubber view
@@ -31,10 +31,10 @@ val hasFlag = (window.attributes.flags and FLAG_SHOW_WALLPAPER) != 0
 if (hasFlag == show) return
 ```
 
-### 2. Never recreate `AppWidgetHostView` on every `onResume`
-`WidgetHostManager.render()` tracks `renderedWidgetId` and exits early when the widget id hasn't changed. Removing and re-adding the host view tears down any embedded surfaces the widget holds, opening an InputFlinger focus gap.
+### 2. Never recreate / re-parent `AppWidgetHostView` on every `onResume`
+`WidgetHostManager.render()` tracks `renderedWidgetIds` (the ordered list) and exits early when it hasn't changed. Removing and re-adding a host view tears down any embedded surfaces the widget holds, opening an InputFlinger focus gap.
 
-If you change widget rendering logic, preserve the `if (id == renderedWidgetId) return` guard.
+If you change widget rendering logic, preserve the `if (live == renderedWidgetIds) return` guard. The multi-widget strip is a hand-rolled snap-scroller (`WidgetPagerView`) precisely so every `AppWidgetHostView` stays attached to one `LinearLayout` for its whole life — do **not** swap it for `ViewPager2`/`RecyclerView`, which recycle and re-parent pages.
 
 ### 3. Dismiss the IME in `onPause`
 `MainActivity.onPause()` calls `imm.hideSoftInputFromWindow` + `currentFocus?.clearFocus()`. This ensures the IME never holds a live `InputConnection` across a focus transition (screen-off, app-switch), which caused a separate class of the same ANR when the keyboard had been open.

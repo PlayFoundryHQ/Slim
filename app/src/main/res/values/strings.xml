@@ -72,10 +72,12 @@
 
     <!-- Widget -->
     <string name="settings_section_widget">Widget</string>
-    <string name="settings_widget_summary">Place one app widget above your app list (e.g. Duolingo streak, calendar, clock)</string>
+    <string name="settings_widget_summary">Add up to 5 widgets above your app list (Duolingo streak, calendar, clock…) and swipe left/right between them.</string>
     <string name="settings_add_widget">Add a widget</string>
-    <string name="settings_change_widget">Change widget</string>
+    <string name="settings_add_another_widget">Add another widget  ·  %1$d added</string>
+    <string name="settings_widget_limit_reached">Widget limit reached (5)</string>
     <string name="settings_remove_widget">Remove widget</string>
+    <string name="settings_remove_a_widget">Remove a widget</string>
     <string name="settings_widget_added">Widget added — open your home screen to see it</string>
     <string name="settings_widget_removed">Widget removed</string>
     <string name="settings_widget_pick_failed">No widget picker available on this device</string>

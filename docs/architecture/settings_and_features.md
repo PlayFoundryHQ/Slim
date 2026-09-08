@@ -50,7 +50,7 @@ All options are stored in `SharedPreferences` (`slim_launcher_prefs`) behind a t
 | `swipe_up_search` | Boolean | `true` | Enable/disable the swipe-up search gesture |
 | `swipe_down_notifications` | Boolean | `true` | Swipe down to open the system notification shade |
 | `comm_notifications_only` | Boolean | `true` | Surface only communication notifications on home |
-| `widget_id` | Int | `-1` | Bound home-screen widget id (`-1` = none) |
+| `widget_ids` | String | `""` | Comma-joined ordered app-widget ids on the home strip (empty = none; legacy `widget_id` Int migrated in) |
 
 ## 🌦️ Weather Modes
 
@@ -221,24 +221,24 @@ Import applies preferences immediately and re-applies app customizations by id. 
 
 Swipe down on the home screen calls `StatusBarManager.expandNotificationsPanel()` via reflection (the same approach used by Lawnchair and other FOSS launchers). On devices/ROMs where the hidden API is blocked, the gesture silently no-ops. Toggleable in *Settings → Gestures*.
 
-## 🧩 Home-Screen Widget
+## 🧩 Home-Screen Widget strip
 
-Slim can host **one** standard Android app widget in a slot above the app list (`WidgetHostManager.kt`).
+Slim hosts **1–5** standard Android app widgets in a strip above the app list (`WidgetHostManager.kt`), swiped left/right between (`WidgetPagerView`). One widget = no swipe, no dots; more than one = page dots under the strip.
 
 ### Binding (no special permission)
-Adding a widget is driven from *Settings → Widget → Add a widget*, which fires the system widget picker (`AppWidgetManager.ACTION_APPWIDGET_PICK`). The picker performs the bind on the user's behalf with system privileges, so Slim does **not** need the signature-level `BIND_APPWIDGET` permission. If the chosen provider declares a configuration activity, it's launched via `AppWidgetHost.startAppWidgetConfigureActivityForResult` before the widget is saved. The bound id is persisted in `widget_id`.
+Adding a widget is driven from *Settings → Widget → Add a widget* / *Add another widget*, which fires the system widget picker (`AppWidgetManager.ACTION_APPWIDGET_PICK`). The picker performs the bind on the user's behalf with system privileges, so Slim does **not** need the signature-level `BIND_APPWIDGET` permission. If the chosen provider declares a configuration activity, it's launched via `AppWidgetHost.startAppWidgetConfigureActivityForResult` before the widget is saved. Bound ids are **appended** to `widget_ids` (a comma-joined ordered list; a pre-1.6 single `widget_id` is migrated in on first read). *Remove a widget* lists them by label for individual removal.
 
 **Configuration result handling.** The configure step's outcome is judged by *whether the id is still bound* (`getAppWidgetInfo(id) != null`), **not** by `resultCode`. Glance / Jetpack-Compose configuration activities — GitHub's contribution widget, Slack's status & unreads widgets, and others — persist their own state through `updateAppWidgetState` and then `finish()` without `setResult(RESULT_OK)`, so a correctly configured widget returns `RESULT_CANCELED`. Gating on `resultCode` (the pre-1.5.2 behaviour) silently deleted every such widget right after the user set it up.
 
-**Glance sizing (1.5.3).** Even once bound, a Glance widget renders `AppWidgetHostView`'s error view ("Couldn't add widget") unless the host publishes a size: Glance opens a sizing session on bind and, receiving no size event, closes it having emitted only an error `RemoteViews`. `WidgetHostManager.publishWidgetOptions()` calls `AppWidgetManager.updateAppWidgetOptions()` with the min/max width/height **and** (API 31+) the `OPTION_APPWIDGET_SIZES` `List<SizeF>` that Glance 1.1+ actually reads — `AppWidgetHostView.updateAppWidgetSize()` alone does not populate that list reliably. It's called before `host.createView()` on every render; it only touches `AppWidgetManager`, never the host view, so it can't reopen the focus gap that recreating the view would. Symptom before the fix: Duolingo (plain `RemoteViews`) worked, GitHub/Slack (Glance) showed "Couldn't add widget".
-
 ### Hosting & rendering
-`MainActivity` owns an `AppWidgetHost` (stable `HOST_ID`), started/stopped with the Activity lifecycle. The persistent identity is the `(package, HOST_ID)` pair, so a widget bound by the Settings host renders through the MainActivity host.
+`MainActivity`'s `WidgetHostManager` owns an `AppWidgetHost` (stable `HOST_ID`), started/stopped with the Activity lifecycle. The host is built from **`context.applicationContext`, not the Activity** — an `AppCompatActivity`'s `LayoutInflater` carries the view-substitution factory that rewrites `<ImageView>` → `AppCompatImageView` inside a widget's `RemoteViews`, which RemoteViews' method allow-list then rejects (`setImageResource` "can't use method with RemoteViews") → the widget collapses to the "Couldn't add widget" error view. Duolingo's streak widget dodged it; Glance widgets (GitHub, Slack) did not. The application context has no factory and still carries `Theme.Slim`.
 
-`WidgetHostManager.render()` is called on every `onResume`, but it **skips `removeAllViews` + `createView` when the widget id has not changed** since the last render. This is critical: destroying and recreating `AppWidgetHostView` tears down any embedded surfaces the widget holds and opens an InputFlinger focus-token gap that causes "Application does not have a focused window" ANRs. Re-creating the view is only necessary when the bound widget actually changes. Rendering also self-heals: if the provider goes missing (app uninstalled), the stale id is cleared and the slot hidden.
+`WidgetHostManager.render()` is called on every `onResume` but **rebuilds only when the `widget_ids` list changes** (`renderedWidgetIds` guard). Destroying and recreating an `AppWidgetHostView` tears down any embedded surfaces the widget holds and opens an InputFlinger focus-token gap that causes "Application does not have a focused window" ANRs — so `WidgetPagerView` keeps every host view attached to one `LinearLayout` for its whole lifetime and only changes `scrollX`; **nothing is recycled or re-parented**, which is why the strip is a hand-rolled snap-scroller and not `ViewPager2`/`RecyclerView`. Rendering self-heals: an id whose provider went missing (app uninstalled) is dropped from `widget_ids` and the strip re-laid-out (hidden if it was the last).
+
+**Glance sizing (1.5.3).** Even once bound, a Glance widget renders the error view unless the host publishes a size: Glance opens a sizing session on bind and, receiving no size event, closes it having emitted only an error `RemoteViews`. `WidgetHostManager.publishWidgetOptions()` calls `AppWidgetManager.updateAppWidgetOptions()` with min/max width/height **and** (API 31+) the `OPTION_APPWIDGET_SIZES` `List<SizeF>` that Glance 1.1+ reads — `updateAppWidgetSize()` alone does not populate that list reliably. Called before `host.createView()` per widget; touches only `AppWidgetManager`, never a host view.
 
 ### Predictable look across widget shapes
-- The slot height adapts to the widget's declared size (`minHeight`, preferring the API 31+ `targetCellHeight`), clamped to a band (min 64dp → max 45% of screen height) so a tiny widget isn't lost and a huge one can't dominate.
-- The widget fills the correctly-sized box (no vertical stretching/cropping), and `clipToOutline` over a rounded `widget_slot_bg` rounds every widget to one consistent silhouette — opaque widgets like Duolingo and transparent ones like a clock all share the same card.
+- The strip height is the **tallest** widget's declared size (`minHeight`, preferring the API 31+ `targetCellHeight`), clamped to a band (min 64dp → max 45% of screen height); plus ~16dp for the page dots when there is more than one widget.
+- Each widget fills its correctly-sized box (no vertical stretching/cropping), and `clipToOutline` over a rounded `widget_slot_bg` rounds the strip to one consistent silhouette.
 
-Removing the widget (*Settings → Widget → Remove widget*) deletes the host id and hides the slot.
+Removing a widget (*Settings → Widget → Remove [a] widget*) deletes that host id and re-lays-out the strip; removing the last one hides it.

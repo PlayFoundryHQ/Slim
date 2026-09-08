@@ -141,11 +141,12 @@
             android:textSize="12sp" />
     </LinearLayout>
 
-    <!-- App Widget Frame: hosts a single optional third-party widget.
-         Hidden until one is added via Slim Settings > Widget. Height is set at
-         runtime to the widget's natural size (WidgetHostManager) so widgets of
-         any shape render without stretching; the rounded background + outline
-         clip give every widget one consistent silhouette. -->
+    <!-- App Widget strip: hosts 1–5 optional third-party widgets, swiped
+         left/right between (WidgetHostManager builds a WidgetPagerView + page
+         dots inside here). Hidden until one is added via Slim Settings > Widget.
+         Height is set at runtime to the tallest widget's natural size so widgets
+         of any shape render without stretching; the rounded background + outline
+         clip give the strip one consistent silhouette. -->
     <FrameLayout
         android:id="@+id/widgetContainer"
         android:layout_width="0dp"
