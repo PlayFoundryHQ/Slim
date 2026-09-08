@@ -6,6 +6,14 @@
          Every other launcher feature works fully offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Backs the "Keep Slim running" row in Settings → System: the one-tap
+         "ignore battery optimizations" dialog. A launcher that an OEM freezer
+         (OxygenOS/ColorOS "Hans" et al.) suspends in the background wakes slowly
+         and can drop its window focus on the next unlock; this exemption is the
+         only mitigation a third-party launcher can request programmatically.
+         Never requested automatically — only when the user taps that row. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Package visibility: a launcher needs to discover every app that has a
          launcher activity. This is the Play-policy-friendly alternative to
          QUERY_ALL_PACKAGES. -->

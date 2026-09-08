@@ -130,6 +130,19 @@ class SlimPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_FOCUS_SCREEN, false)
         set(value) = prefs.edit().putBoolean(KEY_FOCUS_SCREEN, value).apply()
 
+    // ---- First-run prompts ----
+    /**
+     * Set once the "make Slim your default Home app" role chooser has been shown
+     * (whether the user accepted or declined). Persisted so a later process death
+     * — the system killing the backgrounded launcher overnight, an ANR restart —
+     * doesn't reset the in-memory guard and re-pop the chooser on the next
+     * launch. After this is set the only entry point is the explicit Settings
+     * row, which never carries the focus-transition ANR risk of an auto-launch.
+     */
+    var defaultLauncherPromptShown: Boolean
+        get() = prefs.getBoolean(KEY_DEFAULT_LAUNCHER_PROMPT_SHOWN, false)
+        set(value) = prefs.edit().putBoolean(KEY_DEFAULT_LAUNCHER_PROMPT_SHOWN, value).apply()
+
     // ---- Widget ----
     /**
      * The single app-widget id currently bound to Slim's home screen, or
@@ -225,5 +238,6 @@ class SlimPreferences(context: Context) {
         private const val KEY_IMMERSIVE_MODE = "immersive_mode"
         private const val KEY_WIDGET_ID = "widget_id"
         private const val KEY_FOCUS_SCREEN = "focus_screen"
+        private const val KEY_DEFAULT_LAUNCHER_PROMPT_SHOWN = "default_launcher_prompt_shown"
     }
 }

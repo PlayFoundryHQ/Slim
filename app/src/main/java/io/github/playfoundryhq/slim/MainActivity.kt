@@ -115,8 +115,9 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     private var swipeDistanceThresholdPx = 0f
     private var swipeVelocityThresholdPxPerSec = 0f
     private var swipeUpDistanceThresholdPx = 0f
-    // Prompt to become the default launcher at most once per process so we
-    // nudge after a fresh install without nagging on every resume.
+    // In-memory re-entrancy guard for the default-launcher prompt. The durable
+    // "already shown" state lives in prefs.defaultLauncherPromptShown so a
+    // process death can't reset it; this just stops a double-fire in one process.
     private var defaultHomePrompted = false
     // Whether the IME was open when onPause() fired — used to restore keyboard
     // state on resume only when the screen turned off (not after Home presses).
@@ -521,6 +522,10 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
+            // Safe launch point for the one-time default-Home chooser: we
+            // definitively hold the focus token here, so the chooser's window
+            // transition can't race it. No-ops immediately once shown.
+            maybePromptDefaultLauncher()
             if (::prefs.isInitialized && prefs.immersiveMode &&
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
             ) {
@@ -538,22 +543,36 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     /**
      * If Slim isn't the default Home app (e.g. right after an install, which
      * wipes the assignment), show the one-tap RoleManager dialog to reclaim it.
-     * Fires at most once per process so a declined prompt doesn't keep popping.
      *
-     * All work runs on IO: PackageManager.resolveActivity(), RoleManager.isRoleAvailable(),
-     * and RoleManager.isRoleHeld() are Binder IPC calls that can stall for seconds on
-     * some devices. Calling them synchronously in onResume() was blocking the main
-     * thread long enough to trigger "Application does not have a focused window" ANRs.
+     * Shown at most **once, ever** (persisted in prefs) — a declined prompt never
+     * comes back on its own; the Settings → System row is the way back in.
+     *
+     * Two hard rules, both learned from "Application does not have a focused
+     * window" ANRs traced to this exact call:
+     *  1. Only launch the chooser while we unambiguously hold the window focus.
+     *     Launching it mid focus-transition — e.g. the first frame after an OEM
+     *     freezer thaws the process — races the InputFlinger focus-token handoff.
+     *     Hence the driver is [onWindowFocusChanged] + a [hasWindowFocus] recheck,
+     *     never onResume (which also fired on every single Home press).
+     *  2. `isDefaultHome()` must agree via RoleManager, not just resolveActivity()
+     *     — see that method. A single stale signal must not trigger a prompt.
+     *
+     * The Binder IPC (resolveActivity / isRoleHeld) runs on IO; it can stall for
+     * hundreds of ms on some devices and must never touch the main thread here.
      */
     private fun maybePromptDefaultLauncher() {
-        if (defaultHomePrompted) return
-        defaultHomePrompted = true  // set before the coroutine to prevent double-fire
+        if (defaultHomePrompted || !::prefs.isInitialized) return
+        if (prefs.defaultLauncherPromptShown) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (!hasWindowFocus()) return
+        defaultHomePrompted = true
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 if (DefaultLauncherHelper.isDefaultHome(this@MainActivity)) return@launch
                 val intent = DefaultLauncherHelper.requestIntent(this@MainActivity)
                 withContext(Dispatchers.Main) {
+                    if (!hasWindowFocus() || isFinishing) return@withContext
+                    prefs.defaultLauncherPromptShown = true
                     defaultHomeLauncher.launch(intent)
                 }
             }
@@ -592,7 +611,6 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
 
     override fun onResume() {
         super.onResume()
-        maybePromptDefaultLauncher()
         // Re-render in case a widget was added/removed/changed in Settings.
         widgetHost.render()
         applyHeaderPreferences()
@@ -1542,8 +1560,21 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
                     true
                 }
             } else if (holder is SettingsViewHolder) {
-                // Settings shortcut row
-                holder.appIcon.visibility = View.GONE
+                // Settings shortcut row — the last entry when scrubbing the full
+                // list. It carries Slim's own launcher icon so it doesn't read as
+                // a broken row next to every icon-bearing app above it (text-only
+                // mode still hides it, like every other row).
+                if (!showIcons) {
+                    holder.appIcon.visibility = View.GONE
+                } else {
+                    holder.appIcon.visibility = View.VISIBLE
+                    val slimIcon = iconCache.get(context.packageName) ?: runCatching {
+                        pm.getApplicationIcon(context.packageName)
+                    }.getOrNull()?.also { iconCache.put(context.packageName, it) }
+                    holder.appIcon.setImageDrawable(
+                        slimIcon ?: context.getDrawable(android.R.drawable.sym_def_app_icon)
+                    )
+                }
                 holder.appName.text = context.getString(R.string.settings_title)
                 holder.appName.setTextColor(accentColor)
                 holder.workBadge.visibility = View.GONE

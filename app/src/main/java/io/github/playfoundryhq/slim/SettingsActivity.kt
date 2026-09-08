@@ -114,6 +114,13 @@ class SettingsActivity : AppCompatActivity() {
         bindAboutSection()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // The System-section rows reflect state that changes outside Slim
+        // (in system Settings), so refresh their status every time we come back.
+        refreshSystemSectionStatus()
+    }
+
     private fun bindAppearanceSection() {
         val switchIcons = findViewById<SwitchMaterial>(R.id.switchShowAppIcons)
         switchIcons.isChecked = prefs.showAppIcons
@@ -457,6 +464,11 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
+    // BatteryLife: the Play Store restricts REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+    // but Slim ships via GitHub Releases and F-Droid, and for a home-replacement
+    // app that an OEM freezer suspends this exemption is a legitimate, on-request
+    // fix — never asked for automatically.
+    @android.annotation.SuppressLint("BatteryLife")
     private fun bindSystemSection() {
         findViewById<TextView>(R.id.btnDefaultLauncher).setOnClickListener {
             defaultHomeLauncher.launch(DefaultLauncherHelper.requestIntent(this))
@@ -465,6 +477,51 @@ class SettingsActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             Toast.makeText(this, R.string.settings_notification_hint, Toast.LENGTH_LONG).show()
         }
+        findViewById<TextView>(R.id.btnBatteryOptimization).setOnClickListener {
+            if (isIgnoringBatteryOptimizations()) {
+                Toast.makeText(this, R.string.settings_battery_optimization_done, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            // The direct one-tap dialog (needs REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            // fall back to the full battery-optimization list if the OEM blocks it.
+            val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                .setData(Uri.parse("package:$packageName"))
+            val list = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+            try {
+                startActivity(direct)
+            } catch (e: Exception) {
+                try {
+                    startActivity(list)
+                    Toast.makeText(this, R.string.settings_battery_optimization_hint, Toast.LENGTH_LONG).show()
+                } catch (e2: Exception) {
+                    Toast.makeText(this, R.string.app_info_failed, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        refreshSystemSectionStatus()
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    /** Appends a live " · on/off" badge to each System-section row. */
+    private fun refreshSystemSectionStatus() {
+        fun badge(on: Boolean) =
+            getString(if (on) R.string.settings_status_on else R.string.settings_status_off)
+
+        findViewById<TextView>(R.id.btnDefaultLauncher).text =
+            getString(R.string.settings_choose_home) + badge(DefaultLauncherHelper.isDefaultHome(this))
+
+        val listenerEnabled = Settings.Secure.getString(
+            contentResolver, "enabled_notification_listeners"
+        )?.contains(packageName) == true
+        findViewById<TextView>(R.id.btnNotificationAccess).text =
+            getString(R.string.settings_notification_permission) + badge(listenerEnabled)
+
+        findViewById<TextView>(R.id.btnBatteryOptimization).text =
+            getString(R.string.settings_battery_optimization) + badge(isIgnoringBatteryOptimizations())
     }
 
     private fun bindAboutSection() {

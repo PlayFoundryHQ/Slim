@@ -57,6 +57,11 @@ In `AndroidManifest.xml`, the main Activity must register as a system home launc
 - **Permission**: **None.** Binding goes through the system widget picker (`ACTION_APPWIDGET_PICK`), which binds the chosen widget on the user's behalf with system privileges. This avoids the signature-level `BIND_APPWIDGET` permission, which only the system/default-configured launcher can hold — so Slim stays installable as an ordinary app.
 - **Purpose**: Lets the launcher host and render one standard Android app widget. Implemented in `WidgetHostManager.kt`; see [[settings_and_features#🧩 Home-Screen Widget|Settings & Features → Home-Screen Widget]].
 
+### 5. Battery-Optimization Exemption (opt-in)
+- **Permission**: `android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+- **Trigger**: **Only** the *Keep Slim running in background* row in Settings → System. Never requested at startup or automatically.
+- **Purpose**: On OEM ROMs with aggressive background freezers (OxygenOS/ColorOS "Hans", MIUI, One UI) the backgrounded home process is frozen/killed; on the next unlock it wakes slowly and can lose its input focus (see Window Focus & ANR Stability). The exemption is the only mitigation a third-party launcher can request in code. The row uses `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (one-tap dialog), falling back to `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS` (the full list) if the OEM blocks the direct intent. Play Store restricts this permission; Slim is distributed via GitHub Releases + F-Droid, where it is allowed, and the use case (a home app) is a legitimate one. Lint `BatteryLife` is suppressed with a rationale comment.
+
 ---
 
 ## 🏛️ Component Architecture
@@ -157,6 +162,14 @@ When the search panel is open and the screen turns off (or power button is press
 
 The `post{}` deferral is essential — firing `showSoftInput` before the window has re-acquired input focus races with WM on aggressive OEM ROMs (ColorOS / Oplus Hans) and silently no-ops or triggers the "no focused window" ANR.
 
+#### 6. The default-Home role chooser must only launch while Slim holds window focus
+Confirmed on-device (OnePlus Nord, Sep 2026): three separate "no focused window" ANRs — main thread idle each time — traced to `maybePromptDefaultLauncher()` launching the system role chooser (`permissioncontroller/…DefaultAppActivity`) on top of an already-visible home screen. The chooser's window transition raced the focus-token handoff. It fired because `isDefaultHome()` used only `resolveActivity(HOME)`, which briefly resolves to the stock launcher / null right after "Hans" thaws the process — a false negative — while Slim still held `ROLE_HOME`.
+
+**Rule**:
+- `DefaultLauncherHelper.isDefaultHome()` checks `RoleManager.isRoleHeld(ROLE_HOME)` first on Q+; `resolveActivity()` is only a fallback. Report "not default" only when both disagree.
+- `maybePromptDefaultLauncher()` runs from `onWindowFocusChanged(hasFocus=true)` (with a `hasWindowFocus()` recheck right before `launch()`), never `onResume`.
+- It shows the chooser **once, ever** — `prefs.defaultLauncherPromptShown` is persisted, so an ANR restart or an overnight process kill cannot re-arm it. After that the only path is Settings → System → *Set Default Home Launcher*.
+
 ---
 
 ## 🖼️ Startup & Transition Visuals
@@ -208,4 +221,6 @@ an explicit long-press on the clock.
 - **Gesture thresholds are density-scaled**: swipe distance/velocity thresholds in `MainActivity` are computed once from `resources.displayMetrics.density` in `onCreate`, not hardcoded px constants — hardcoded px values are tuned for whatever density they were written on and drift on other screens.
 
 > [!NOTE] OEM background process freezers are a separate failure mode from ANRs
-> On OnePlus/Oppo devices (OxygenOS/ColorOS "Hans" process freezer) and similar aggressive-battery-management OEM skins, a backgrounded app — including the default Home app — can be frozen (SIGSTOP-style) even while holding the Home role. The visible symptom (a momentary freeze/grayout right as the launcher resumes) is the OS thawing the process, not a bug in Slim's own code, and `dumpsys gfxinfo`/jank stats won't show it since it happens before the first frame after resume. If a user reports intermittent freezes on resume specifically (as opposed to steady jank during use), check `dumpsys activity processes | grep -A2 io.github.playfoundryhq.slim` for `isFrozen`/`isFreezeExempt`, and `dumpsys deviceidle whitelist` for battery-optimization exemption, before assuming a code-side regression. The fix is exempting Slim from battery optimization on-device (Settings → Battery → Battery optimization → Slim → Don't optimize), not something Slim can force programmatically.
+> On OnePlus/Oppo devices (OxygenOS/ColorOS "Hans" process freezer) and similar aggressive-battery-management OEM skins, a backgrounded app — including the default Home app — can be frozen (SIGSTOP-style) even while holding the Home role. The visible symptom (a momentary freeze/grayout right as the launcher resumes) is the OS thawing the process, not a bug in Slim's own code, and `dumpsys gfxinfo`/jank stats won't show it since it happens before the first frame after resume. If a user reports intermittent freezes on resume specifically (as opposed to steady jank during use), check `dumpsys activity processes | grep -A2 io.github.playfoundryhq.slim` for `isFrozen`/`isFreezeExempt`, and `dumpsys deviceidle whitelist` for battery-optimization exemption, before assuming a code-side regression. The fix is exempting Slim from battery optimization — offered in-app via Settings → System → *Keep Slim running in background* (permission #5 above), or on-device at Settings → Battery → Battery optimization → Slim → Don't optimize. Slim cannot force it programmatically; the in-app row only opens the system dialog.
+>
+> A thaw can also surface as a "no focused window" ANR rather than a plain grayout if Slim launches an Activity (e.g. the default-Home chooser) on the first post-thaw frame — see Window Focus & ANR Stability rule 6.
