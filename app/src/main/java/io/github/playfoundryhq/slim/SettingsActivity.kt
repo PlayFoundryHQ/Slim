@@ -218,6 +218,13 @@ class SettingsActivity : AppCompatActivity() {
      * renders it. Only one widget slot exists, so the previous one is released.
      */
     private fun finishWidgetSetup(id: Int) {
+        // Guard against a picker that returned an unbound id (some OEM pickers
+        // hand back an allocation without binding it).
+        if (widgetManager.getAppWidgetInfo(id) == null) {
+            widgetHost.deleteAppWidgetId(id)
+            Toast.makeText(this, R.string.settings_widget_pick_failed, Toast.LENGTH_LONG).show()
+            return
+        }
         val previous = prefs.widgetId
         if (previous != SlimPreferences.NO_WIDGET && previous != id) {
             widgetHost.deleteAppWidgetId(previous)
@@ -245,13 +252,20 @@ class SettingsActivity : AppCompatActivity() {
         val id = data?.getIntExtra(
             AppWidgetManager.EXTRA_APPWIDGET_ID, pendingWidgetId
         ) ?: pendingWidgetId
-        if (resultCode == RESULT_OK && id != AppWidgetManager.INVALID_APPWIDGET_ID) {
+        pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+        if (id == AppWidgetManager.INVALID_APPWIDGET_ID) return
+
+        // Do NOT gate on resultCode. Glance / Jetpack-Compose configuration
+        // activities (GitHub's contribution widget, Slack's status & unreads
+        // widgets, …) persist their own state via updateAppWidgetState and then
+        // finish() *without* setResult(RESULT_OK) — so a perfectly configured
+        // widget comes back as RESULT_CANCELED. The reliable signal is simply
+        // whether the id is still bound to a live provider; if it is, keep it.
+        if (widgetManager.getAppWidgetInfo(id) != null) {
             finishWidgetSetup(id)
-        } else if (id != AppWidgetManager.INVALID_APPWIDGET_ID) {
-            // User cancelled configuration — release the reserved id.
+        } else {
             widgetHost.deleteAppWidgetId(id)
         }
-        pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
     }
 
     private fun bindBackupSection() {
