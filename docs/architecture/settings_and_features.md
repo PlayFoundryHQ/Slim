@@ -228,6 +228,8 @@ Slim can host **one** standard Android app widget in a slot above the app list (
 ### Binding (no special permission)
 Adding a widget is driven from *Settings → Widget → Add a widget*, which fires the system widget picker (`AppWidgetManager.ACTION_APPWIDGET_PICK`). The picker performs the bind on the user's behalf with system privileges, so Slim does **not** need the signature-level `BIND_APPWIDGET` permission. If the chosen provider declares a configuration activity, it's launched via `AppWidgetHost.startAppWidgetConfigureActivityForResult` before the widget is saved. The bound id is persisted in `widget_id`.
 
+**Configuration result handling.** The configure step's outcome is judged by *whether the id is still bound* (`getAppWidgetInfo(id) != null`), **not** by `resultCode`. Glance / Jetpack-Compose configuration activities — GitHub's contribution widget, Slack's status & unreads widgets, and others — persist their own state through `updateAppWidgetState` and then `finish()` without `setResult(RESULT_OK)`, so a correctly configured widget returns `RESULT_CANCELED`. Gating on `resultCode` (the pre-1.5.2 behaviour) silently deleted every such widget right after the user set it up — the visible symptom was "I pick GitHub/Slack and nothing appears", while a no-config widget like Duolingo's streak worked fine.
+
 ### Hosting & rendering
 `MainActivity` owns an `AppWidgetHost` (stable `HOST_ID`), started/stopped with the Activity lifecycle. The persistent identity is the `(package, HOST_ID)` pair, so a widget bound by the Settings host renders through the MainActivity host.
 
