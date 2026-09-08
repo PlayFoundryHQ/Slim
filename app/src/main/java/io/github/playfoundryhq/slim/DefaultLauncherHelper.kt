@@ -16,8 +16,26 @@ import android.provider.Settings
  */
 object DefaultLauncherHelper {
 
-    /** True if Slim is currently the system's default Home app. */
+    /**
+     * True if Slim is currently the system's default Home app.
+     *
+     * On Android 10+ `RoleManager.isRoleHeld(ROLE_HOME)` is the authoritative
+     * signal and is checked first. `resolveActivity(HOME)` is only a heuristic:
+     * right after an OEM background-freezer (OxygenOS/ColorOS "Hans") thaws or
+     * restarts our process it briefly resolves HOME to the stock launcher or to
+     * null even though Slim still holds the role. That false negative used to
+     * make [maybePromptDefaultLauncher][/* MainActivity */] pop the role chooser
+     * on top of an already-focused home screen, and that spurious chooser launch
+     * raced the window-focus handoff into an "Application does not have a focused
+     * window" ANR. So we only report "not default" when *both* signals agree.
+     */
     fun isDefaultHome(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val roleManager = context.getSystemService(RoleManager::class.java)
+            if (roleManager != null && roleManager.isRoleHeld(RoleManager.ROLE_HOME)) {
+                return true
+            }
+        }
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
         val resolved = context.packageManager.resolveActivity(
             intent, PackageManager.MATCH_DEFAULT_ONLY

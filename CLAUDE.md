@@ -44,6 +44,12 @@ Do not remove this block. Do not move it to `onStop` — by then the window is a
 ### 4. No Binder IPC on the main thread in lifecycle callbacks
 `PackageManager`, `RoleManager`, and similar system-service calls can stall for hundreds of milliseconds. They must run on `Dispatchers.IO`. See `maybePromptDefaultLauncher()` for the canonical pattern.
 
+### 5. Never launch an Activity/dialog from Slim without holding window focus
+The default-Home role chooser (`maybePromptDefaultLauncher()`) is the sharp edge here. Launching *any* activity while Slim's window is mid focus-transition — the first frame after an OEM freezer (OxygenOS/ColorOS "Hans") thaws the process — races the InputFlinger focus-token handoff and produces the "no focused window" ANR **with the main thread idle**. Rules that must not regress:
+- The chooser is driven from `onWindowFocusChanged(hasFocus=true)` + a `hasWindowFocus()` recheck on the main thread before `launch()`, **never** `onResume`.
+- It fires **once, ever** — guarded by `prefs.defaultLauncherPromptShown` (persisted, survives process death) as well as the in-memory `defaultHomePrompted`.
+- `DefaultLauncherHelper.isDefaultHome()` trusts `RoleManager.isRoleHeld(ROLE_HOME)` first; `resolveActivity(HOME)` alone gives false negatives right after a thaw. A single stale signal must never trigger the prompt.
+
 ---
 
 ## Other architectural invariants

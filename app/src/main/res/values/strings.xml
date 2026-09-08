@@ -98,6 +98,14 @@
     <string name="settings_choose_home">Set Default Home Launcher</string>
     <string name="settings_notification_hint">Enable Slim Launcher in the list</string>
 
+    <string name="settings_battery_optimization">Keep Slim running in background</string>
+    <string name="settings_battery_optimization_summary">Ask Android to exempt Slim from battery optimisation. Some phones (OnePlus, Oppo, Xiaomi, Samsung…) freeze background apps hard, which can leave the launcher slow to wake or briefly unresponsive right after you unlock.</string>
+    <string name="settings_battery_optimization_hint">Choose \"Allow\" / \"Don\'t optimize\" for Slim</string>
+    <string name="settings_battery_optimization_done">Slim is exempt from battery optimisation</string>
+    <!-- Status suffix appended to the System-section rows -->
+    <string name="settings_status_on">  ·  on</string>
+    <string name="settings_status_off">  ·  off</string>
+
     <string name="about_version">Version %1$s</string>
     <string name="about_description">Slim is an ultra-minimalist, gesture-based Android launcher built for speed, focus, and single-handed use. Free and open source, forever.</string>
     <string name="about_who_we_are">Who we are</string>

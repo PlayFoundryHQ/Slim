@@ -21,7 +21,7 @@ Slim deliberately has **no persistent settings button** on the home screen. Inst
 
 - Tapping **Slim** in the alphabetical list or search results opens `SettingsActivity`.
 - Long-pressing the Slim entry does the same.
-- A Settings shortcut row also sits at the very end of the all-apps list (reached by scrubbing the alphabet).
+- A Settings shortcut row also sits at the very end of the all-apps list (reached by scrubbing the alphabet). It carries Slim's own launcher icon so it matches every icon-bearing row above it (hidden in text-only mode, like all rows).
 
 The header weather chip is purely informational — it intentionally does **nothing** on tap (it used to open Settings, but that sat right under the clock and was an easy mis-tap). This keeps the home screen at zero visual overhead while keeping settings one obvious tap away.
 
@@ -46,6 +46,7 @@ All options are stored in `SharedPreferences` (`slim_launcher_prefs`) behind a t
 | `background_mode` | String | `solid_black` | `transparent` / `dimmed` / `solid_black` window background |
 | `immersive_mode` | Boolean | `false` | Hide status bar; show notification count + battery in header |
 | `focus_screen` | Boolean | `false` | Focus screen — long-press the clock to blank home down to a clock |
+| `default_launcher_prompt_shown` | Boolean | `false` | Set once the default-Home role chooser has been shown; persisted so it is never auto-shown a second time |
 | `swipe_up_search` | Boolean | `true` | Enable/disable the swipe-up search gesture |
 | `swipe_down_notifications` | Boolean | `true` | Swipe down to open the system notification shade |
 | `comm_notifications_only` | Boolean | `true` | Surface only communication notifications on home |
@@ -159,6 +160,20 @@ So the focus screen:
 
 It is a self-imposed "blank the phone down to a clock, right now" toggle,
 implemented within what the platform actually allows.
+
+## 🔧 System Section
+
+Three rows, each showing a live `· on` / `· off` badge refreshed in `SettingsActivity.onResume()` (the state changes outside Slim, in system Settings):
+
+| Row | Action | Status source |
+| --- | --- | --- |
+| Set Default Home Launcher | RoleManager `ROLE_HOME` chooser (for-result, so the caller package is readable) | `DefaultLauncherHelper.isDefaultHome()` — `RoleManager.isRoleHeld` first, `resolveActivity` fallback |
+| Enable Notification Access | `ACTION_NOTIFICATION_LISTENER_SETTINGS` | `enabled_notification_listeners` contains our package |
+| Keep Slim running in background | `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (one-tap), fallback `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS` | `PowerManager.isIgnoringBatteryOptimizations()` |
+
+**Default-Home auto-prompt.** On a fresh install Slim shows the Home chooser once, from `onWindowFocusChanged(hasFocus=true)` — never `onResume`, and never while `hasWindowFocus()` is false. It is gated by `default_launcher_prompt_shown` (persisted), so a process death or ANR restart can't re-pop it; after the first showing the row above is the only way in. This is an ANR-safety requirement — see [[system_requirements#🪟 Window Focus & ANR Stability|Window Focus & ANR Stability, rule 6]] for the on-device history.
+
+**Battery row.** For a home-replacement app that OEM freezers ("Hans" etc.) suspend in the background, the exemption is the only in-code mitigation for slow/frozen wakes and post-unlock focus loss. OnePlus/Oppo "Auto-launch" and "Allow background activity" toggles have no public API and can't be surfaced — the row's summary points users there.
 
 ## 🔔 Corner Status Row
 

@@ -286,6 +286,19 @@
             style="@style/SettingsActionRow"
             android:text="@string/settings_notification_permission" />
 
+        <TextView
+            android:id="@+id/btnBatteryOptimization"
+            style="@style/SettingsActionRow"
+            android:text="@string/settings_battery_optimization" />
+
+        <TextView
+            android:id="@+id/txtBatteryOptimizationSummary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_battery_optimization_summary"
+            android:textColor="@color/text_muted"
+            android:textSize="12sp" />
+
         <!-- ======== ABOUT ======== -->
         <TextView
             style="@style/SettingsSectionHeader"
