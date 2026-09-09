@@ -26,6 +26,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.TextView
@@ -83,6 +84,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     private var batteryReceiver: BroadcastReceiver? = null
     private var batteryReceiverRegistered = false
     private lateinit var widgetHost: WidgetHostManager
+    private lateinit var widgetContainer: FrameLayout
 
     private lateinit var db: AppDatabase
     private lateinit var repository: AppRepository
@@ -102,6 +104,10 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     // Set on ACTION_DOWN when the touch starts on the alphabet index so the
     // swipe-up-for-search gesture never fires while scrubbing letters.
     private var touchStartedOnWave = false
+    // Set on ACTION_DOWN when the touch starts on the widget strip — a
+    // left/right swipe between widgets there must not be read as swipe-up search.
+    private var touchStartedOnWidget = false
+    private val widgetHitRect = android.graphics.Rect()
     // Track last down position for reliable swipe detection.
     // GestureDetector.onFling is unreliable when RecyclerView consumes events.
     private var lastDownX = 0f
@@ -228,7 +234,8 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         prefs = SlimPreferences(this)
 
         // Host for an optional single home-screen widget (added via Settings).
-        widgetHost = WidgetHostManager(this, findViewById(R.id.widgetContainer), prefs)
+        widgetContainer = findViewById(R.id.widgetContainer)
+        widgetHost = WidgetHostManager(this, widgetContainer, prefs)
 
         // Set up home RecyclerView (Favorites + alphabetical browsing)
         adapter = AppListAdapter(this, emptyList()) { appItem, isLongClick ->
@@ -296,15 +303,19 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
                 val yDiff = downY - e2.y
 
                 // Swipe up opens search — only from the home (favorites) state,
-                // never while browsing the alphabetical list or scrubbing.
-                if (yDiff > swipeDistanceThresholdPx && Math.abs(velocityY) > swipeVelocityThresholdPxPerSec) {
+                // never while browsing the alphabetical list or scrubbing, and
+                // only for a clearly-vertical fling (so a fast left/right widget
+                // swipe with a little drift doesn't count).
+                if (yDiff > swipeDistanceThresholdPx && Math.abs(velocityY) > swipeVelocityThresholdPxPerSec &&
+                    yDiff > Math.abs(xDiff) * 1.4f) {
                     if (prefs.swipeUpForSearch && !isAlphabetScrubbing) {
                         showSearchBar()
                         return true
                     }
                 }
                 // Swipe down opens the system notification shade
-                if (yDiff < -swipeDistanceThresholdPx && Math.abs(velocityY) > swipeVelocityThresholdPxPerSec) {
+                if (yDiff < -swipeDistanceThresholdPx && Math.abs(velocityY) > swipeVelocityThresholdPxPerSec &&
+                    Math.abs(yDiff) > Math.abs(xDiff) * 1.4f) {
                     if (prefs.swipeDownForNotifications && !isAlphabetScrubbing &&
                         searchPanel.visibility != View.VISIBLE
                     ) {
@@ -916,23 +927,33 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
             lastDownY = ev.getY(0)
             touchStartedOnWave = ev.x >= waveGestureView.left &&
                 ev.y >= waveGestureView.top && ev.y <= waveGestureView.bottom
+            touchStartedOnWidget = widgetContainer.visibility == View.VISIBLE &&
+                widgetContainer.getGlobalVisibleRect(widgetHitRect) &&
+                widgetHitRect.contains(ev.rawX.toInt(), ev.rawY.toInt())
             resetInactivityTimer()
         }
 
         // Reliable swipe-up: pure distance check, no velocity gate.
         // Uses actual system gesture nav height so we never fight Android's
         // home/recent-apps gestures. Swipes from the middle of the screen always work.
-        if (ev.action == MotionEvent.ACTION_UP && !touchStartedOnWave) {
+        // Skipped when the gesture starts on the alphabet rail or the widget strip
+        // (a left/right widget swipe there), and requires the motion to be clearly
+        // vertical so a diagonal drift never opens search.
+        if (ev.action == MotionEvent.ACTION_UP && !touchStartedOnWave && !touchStartedOnWidget) {
             val inSystemGestureZone = lastDownY > resources.displayMetrics.heightPixels - systemGestureHeight
             val dy = lastDownY - ev.getY(0)
-            if (!inSystemGestureZone && dy > swipeUpDistanceThresholdPx && prefs.swipeUpForSearch && !isAlphabetScrubbing
-                && searchPanel.visibility != View.VISIBLE) {
+            val dx = kotlin.math.abs(ev.getX(0) - lastDownX)
+            if (!inSystemGestureZone && dy > swipeUpDistanceThresholdPx && dy > dx * 1.4f &&
+                prefs.swipeUpForSearch && !isAlphabetScrubbing &&
+                searchPanel.visibility != View.VISIBLE) {
                 showSearchBar()
             }
         }
 
-        // Still pass events to GestureDetector for swipe-down (notifications)
-        // and horizontal swipe (exit alphabet mode).
+        // Still pass events to GestureDetector for swipe-down (notifications) and
+        // horizontal swipe (exit alphabet mode). A left/right widget swipe is
+        // filtered out by the vertical-dominance check inside onFling, so
+        // swipe-down from the widget area still reaches the shade.
         if (!touchStartedOnWave) {
             gestureDetector.onTouchEvent(ev)
         }
