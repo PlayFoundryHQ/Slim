@@ -119,7 +119,7 @@ The launcher draws directly on the system wallpaper, so readability is handled a
 3. The accent color uses **Material You** (`system_accent1_200`) on Android 12+, indigo otherwise.
 4. Header text carries a subtle shadow so it stays legible even on busy wallpapers.
 5. The alphabet index (`WaveGestureView`) and home app list receive the same adaptive palette; the search panel keeps fixed light-on-dark colors since it has its own dark surface.
-6. The Favorites section fades progressively toward the bottom of that section (`AppListAdapter.FAVORITE_FADE_STEP`/`FAVORITE_FADE_FLOOR`), a purely decorative touch applied per-row in `onBindViewHolder`. `appRecyclerView.itemAnimator` is disabled — RecyclerView's default item animator runs its own alpha fade on every item-change update and resets alpha to 1 when it finishes, which was silently clobbering this effect on any list rebuild (notification events, icon/color toggles, app refresh).
+6. The Favorites section has **no "Favorites" header on the home view** — the list there simply *is* your favorites, so the header was noise; it's added only while alphabet-scrubbing, where it separates them from the "All Apps" list. Favorites fade progressively toward the bottom of the section (`AppListAdapter.FAVORITE_FADE_STEP`/`FAVORITE_FADE_FLOOR`), a purely decorative touch applied per-row in `onBindViewHolder`. `appRecyclerView.itemAnimator` is disabled — RecyclerView's default item animator runs its own alpha fade on every item-change update and resets alpha to 1 when it finishes, which was silently clobbering this effect on any list rebuild (notification events, icon/color toggles, app refresh).
 7. In-app dialogs (long-press menu, rename, hidden apps) use `Theme.Slim.Dialog`, matching the app's own dark surface palette (`surface_elevated`/`border_color`) instead of the stock light Material dialog chrome.
 
 ## 🌑 Focus Screen
@@ -223,7 +223,7 @@ Swipe down on the home screen calls `StatusBarManager.expandNotificationsPanel()
 
 ## 🧩 Home-Screen Widget strip
 
-Slim hosts **1–5** standard Android app widgets in a strip above the app list (`WidgetHostManager.kt`), swiped left/right between (`WidgetPagerView`). One widget = no swipe, no dots; more than one = page dots under the strip.
+Slim hosts **1–5** standard Android app widgets in a strip above the app list (`WidgetHostManager.kt`), swiped left/right between (`WidgetPagerView`). One widget fills the strip at a time. With more than one it's a **ring** — an over-swipe past either end rotates around to the other (`WidgetPagerView.circular`), so there is no first/last and **no page indicator**. `overScrollMode` is `ALWAYS` so the edge stretch signals "push further to wrap". `WidgetPagerView.fling()` compensates for the base class negating finger velocity.
 
 ### Binding (no special permission)
 Adding a widget is driven from *Settings → Widget → Add a widget* / *Add another widget*, which fires the system widget picker (`AppWidgetManager.ACTION_APPWIDGET_PICK`). The picker performs the bind on the user's behalf with system privileges, so Slim does **not** need the signature-level `BIND_APPWIDGET` permission. If the chosen provider declares a configuration activity, it's launched via `AppWidgetHost.startAppWidgetConfigureActivityForResult` before the widget is saved. Bound ids are **appended** to `widget_ids` (a comma-joined ordered list; a pre-1.6 single `widget_id` is migrated in on first read). *Remove a widget* lists them by label for individual removal.
@@ -238,7 +238,7 @@ Adding a widget is driven from *Settings → Widget → Add a widget* / *Add ano
 **Glance sizing (1.5.3).** Even once bound, a Glance widget renders the error view unless the host publishes a size: Glance opens a sizing session on bind and, receiving no size event, closes it having emitted only an error `RemoteViews`. `WidgetHostManager.publishWidgetOptions()` calls `AppWidgetManager.updateAppWidgetOptions()` with min/max width/height **and** (API 31+) the `OPTION_APPWIDGET_SIZES` `List<SizeF>` that Glance 1.1+ reads — `updateAppWidgetSize()` alone does not populate that list reliably. Called before `host.createView()` per widget; touches only `AppWidgetManager`, never a host view.
 
 ### Predictable look across widget shapes
-- The strip height is the **tallest** widget's declared size (`minHeight`, preferring the API 31+ `targetCellHeight`), clamped to a band (min 64dp → max 45% of screen height); plus ~16dp for the page dots when there is more than one widget.
+- The strip height eases (190ms) to the **current** widget's own declared size (`minHeight`, preferring the API 31+ `targetCellHeight`), clamped to a band (min 64dp → max 45% of screen height) — a short widget doesn't get a tall empty card, a tall one gets its room.
 - Each widget fills its correctly-sized box (no vertical stretching/cropping), and `clipToOutline` over a rounded `widget_slot_bg` rounds the strip to one consistent silhouette.
 
 Removing a widget (*Settings → Widget → Remove [a] widget*) deletes that host id and re-lays-out the strip; removing the last one hides it.
