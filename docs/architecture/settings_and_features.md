@@ -186,8 +186,10 @@ The notification-count and battery chips (immersive mode only) live in their own
 | Swipe up | Home (favorites) state | Open search panel (if enabled in Settings) |
 | Swipe up | Alphabet browsing / scrubbing | **Nothing** — scrolls the list normally |
 | Swipe down | Home (favorites) state | Open the system notification shade (if enabled) |
-| Touch starting on alphabet index | Anywhere | Letter scrubbing only; never triggers search |
+| Swipe up / down | Must be clearly vertical (`dy > \|dx\| × 1.4`) | A diagonal or mostly-horizontal drag never opens search / shade |
+| Touch starting on the alphabet index **or the widget strip** | Anywhere | Left/right widget swipe (or letter scrubbing) only; never triggers search |
 | Horizontal swipe | Alphabet browsing | Return to favorites |
+| Horizontal swipe | On the widget strip (2+ widgets) | Move between widgets; over-swipe past an end rotates the ring around |
 | Back press | Search open | Close search |
 | Back press | Alphabet browsing | Return to favorites |
 | Long-press clock | Home, focus screen enabled | Raise the focus screen veil |
