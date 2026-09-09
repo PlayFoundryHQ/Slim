@@ -1259,7 +1259,12 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         }
 
         if (favList.isNotEmpty()) {
-            items.add(AdapterItem(ViewType.HEADER, headerText = getString(R.string.title_favorites)))
+            // On the home view the list *is* your favorites — the header is just
+            // noise. Keep it only while scrubbing, where it separates them from
+            // the "All Apps" section below.
+            if (isAlphabetScrubbing) {
+                items.add(AdapterItem(ViewType.HEADER, headerText = getString(R.string.title_favorites)))
+            }
             favList.forEachIndexed { index, fav ->
                 items.add(adapterItemForApp(fav, favoriteFadeIndex = index))
             }

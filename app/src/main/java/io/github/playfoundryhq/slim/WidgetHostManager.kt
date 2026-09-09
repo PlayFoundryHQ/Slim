@@ -5,14 +5,12 @@ import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import androidx.core.content.ContextCompat
 
 /**
  * Hosts Slim's home-screen widget strip: one to [SlimPreferences.MAX_WIDGETS]
@@ -54,7 +52,6 @@ class WidgetHostManager(
     // ANRs. WidgetPagerView keeps every host view attached for its whole life.
     private var renderedWidgetIds: List<Int> = emptyList()
     private var pager: WidgetPagerView? = null
-    private var dotRow: LinearLayout? = null
 
     /** Begin receiving widget updates. Call from Activity.onStart. */
     fun startListening() {
@@ -118,7 +115,6 @@ class WidgetHostManager(
             built.add(hostView to heightDp)
         }
 
-        val multi = built.size > 1
         val maxHeightPx = dpToPx(built.maxOf { it.second })
         pageHeightsPx = IntArray(built.size) { dpToPx(built[it].second) }
 
@@ -150,51 +146,31 @@ class WidgetHostManager(
         )
         pager = newPager
 
-        if (multi) {
-            val dots = buildDots(built.size)
-            container.addView(
-                dots,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                    bottomMargin = dpToPx(5)
-                }
-            )
-            dotRow = dots
-            updateDots(0)
-        } else {
-            dotRow = null
-        }
-
+        // No page indicator: with more than one widget the strip is a ring —
+        // swiping past either end rotates around to the other — so there is no
+        // "first" or "last" to mark.
+        newPager.circular = built.size > 1
         newPager.onPageSettled = { page ->
-            updateDots(page)
-            easeContainerTo(pageHeightsPx.getOrElse(page) { maxHeightPx }, multi)
+            easeContainerTo(pageHeightsPx.getOrElse(page) { maxHeightPx })
         }
 
-        setContainerHeight(pageHeightsPx.firstOrNull() ?: maxHeightPx, multi)
+        setContainerHeight(pageHeightsPx.firstOrNull() ?: maxHeightPx)
         container.visibility = View.VISIBLE
         renderedWidgetIds = renderIds
     }
 
-    private fun chromePx(multi: Boolean) = if (multi) dpToPx(DOTS_STRIP_DP) else 0
-
-    private fun setContainerHeight(pageHeightPx: Int, multi: Boolean) {
-        val lp = container.layoutParams
-        lp.height = pageHeightPx + chromePx(multi)
-        container.layoutParams = lp
+    private fun setContainerHeight(pageHeightPx: Int) {
+        container.layoutParams = container.layoutParams.apply { height = pageHeightPx }
     }
 
-    private fun easeContainerTo(pageHeightPx: Int, multi: Boolean) {
-        val target = pageHeightPx + chromePx(multi)
+    private fun easeContainerTo(pageHeightPx: Int) {
         val start = container.height
-        if (start == target || start <= 0) {
-            setContainerHeight(pageHeightPx, multi)
+        if (start == pageHeightPx || start <= 0) {
+            setContainerHeight(pageHeightPx)
             return
         }
         heightAnimator?.cancel()
-        heightAnimator = android.animation.ValueAnimator.ofInt(start, target).apply {
+        heightAnimator = android.animation.ValueAnimator.ofInt(start, pageHeightPx).apply {
             duration = 190
             addUpdateListener { a ->
                 container.layoutParams = container.layoutParams.apply {
@@ -232,38 +208,11 @@ class WidgetHostManager(
         }
     }
 
-    private fun buildDots(count: Int): LinearLayout {
-        val row = LinearLayout(context)
-        row.orientation = LinearLayout.HORIZONTAL
-        val size = dpToPx(6)
-        val gap = dpToPx(5)
-        repeat(count) { i ->
-            val dot = View(context)
-            dot.background = GradientDrawable().apply { shape = GradientDrawable.OVAL }
-            row.addView(
-                dot,
-                LinearLayout.LayoutParams(size, size).apply { if (i > 0) marginStart = gap }
-            )
-        }
-        return row
-    }
-
-    private fun updateDots(activePage: Int) {
-        val row = dotRow ?: return
-        val on = ContextCompat.getColor(context, R.color.text_primary)
-        val off = (ContextCompat.getColor(context, R.color.text_muted) and 0x00FFFFFF) or 0x66000000
-        for (i in 0 until row.childCount) {
-            (row.getChildAt(i).background as? GradientDrawable)
-                ?.setColor(if (i == activePage) on else off)
-        }
-    }
-
     private fun hide() {
         heightAnimator?.cancel()
         container.removeAllViews()
         container.visibility = View.GONE
         pager = null
-        dotRow = null
         pageHeightsPx = IntArray(0)
         renderedWidgetIds = emptyList()
     }
@@ -312,8 +261,5 @@ class WidgetHostManager(
 
         /** Approx dp per home-screen grid cell (incl. spacing) for targetCellHeight. */
         private const val CELL_DP = 74
-
-        /** Extra vertical room reserved under the strip for the page dots. */
-        private const val DOTS_STRIP_DP = 16
     }
 }
