@@ -5,6 +5,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@android:color/transparent"
+    android:clipChildren="false"
     tools:context=".MainActivity">
 
     <!-- Top gradient scrim for header readability -->
@@ -343,7 +344,9 @@
             android:visibility="gone" />
     </LinearLayout>
 
-    <!-- Alphabet scrubber (right edge) -->
+    <!-- Alphabet scrubber (right edge). Its wave pushes letters left of its own
+         bounds, which is why the root doesn't clip children; MainActivity sets
+         its end margin to the Back-gesture inset. -->
     <io.github.playfoundryhq.slim.WaveGestureView
         android:id="@+id/waveGestureView"
         android:layout_width="48dp"
