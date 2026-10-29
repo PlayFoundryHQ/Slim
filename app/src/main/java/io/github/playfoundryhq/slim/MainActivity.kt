@@ -574,6 +574,13 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
                 appRecyclerView.paddingLeft, appRecyclerView.paddingTop,
                 appRecyclerView.paddingRight, baseListBottom + bars.bottom
             )
+            // Keep the alphabet rail out of the right-edge Back-gesture zone, so a
+            // scrub isn't taken as Back (0 with 3-button navigation).
+            val railParams = waveGestureView.layoutParams as ViewGroup.MarginLayoutParams
+            if (railParams.marginEnd != gestureInsets.right) {
+                railParams.marginEnd = gestureInsets.right
+                waveGestureView.layoutParams = railParams
+            }
             // Corner status row (notification/battery) clears the status bar the
             // same way the header does, even though it's a separate view now.
             statusInfoRow.setPadding(
