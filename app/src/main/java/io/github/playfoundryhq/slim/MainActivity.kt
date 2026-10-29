@@ -102,6 +102,13 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     private var allApps = listOf<AppItem>()
     private var favorites = listOf<AppItem>()
     private var filteredList = listOf<AdapterItem>()
+    private val homeTitles by lazy {
+        HomeList.Titles(
+            favorites = getString(R.string.title_favorites),
+            active = getString(R.string.title_active),
+            allApps = getString(R.string.title_all_apps),
+        )
+    }
 
     private lateinit var gestureDetector: GestureDetector
 
@@ -1294,9 +1301,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     /** Keeps the alphabet index compact: only letters that actually have apps. */
     private fun updateAlphabetLetters() {
         if (allApps.isEmpty()) return
-        val letters = allApps
-            .map { it.displayLabel.firstOrNull()?.uppercaseChar()?.toString() ?: "#" }
-            .distinct()
+        val letters = allApps.map { HomeList.indexLetter(it) }.distinct()
         // The settings gear used to live here, but sitting right after the last
         // letter it was easy to mis-tap on scrub-release. Settings is still
         // reachable via the row at the end of the all-apps list and the Slim
@@ -1359,20 +1364,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         }
         historyScroll.visibility = View.GONE
 
-        val q = query.lowercase(Locale.getDefault())
-        val ranked = allApps.mapNotNull { app ->
-            val label = app.displayLabel.lowercase(Locale.getDefault())
-            val rank = when {
-                label.startsWith(q) -> 0
-                label.split(' ', '-', '_', '.').any { it.startsWith(q) } -> 1
-                label.contains(q) -> 2
-                else -> return@mapNotNull null
-            }
-            Pair(rank, app)
-        }
-            .sortedWith(compareBy({ it.first }, { it.second.displayLabel.lowercase(Locale.getDefault()) }))
-            .map { it.second }
-
+        val ranked = SearchRanker.rank(allApps, query)
         val items = ranked.map { adapterItemForApp(it) }
         searchAdapter.updateItems(items)
         txtNoResults.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
@@ -1396,59 +1388,23 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
 
     // Merge Favorites and All Apps into custom RecyclerView elements
     private fun updateAdapterData() {
-        val items = mutableListOf<AdapterItem>()
-
-        // 1. Add Favorites section (Limited to top 5 manually selected OR dynamically tracked favorites)
-        var favList = favorites.take(5)
-        if (favList.isEmpty() && allApps.isNotEmpty()) {
-            favList = allApps.sortedByDescending { it.launchCount }.take(5).filter { it.launchCount > 0 }
-        }
-
-        if (favList.isNotEmpty()) {
-            // On the home view the list *is* your favorites — the header is just
-            // noise. Keep it only while scrubbing, where it separates them from
-            // the "All Apps" section below.
-            if (isAlphabetScrubbing) {
-                items.add(AdapterItem(ViewType.HEADER, headerText = getString(R.string.title_favorites)))
+        val rows = HomeList.build(
+            favorites = favorites,
+            allApps = allApps,
+            activePackages = NotificationRegistry.getActivePackages(),
+            scrubbing = isAlphabetScrubbing,
+            titles = homeTitles,
+        )
+        val items = rows.map { row ->
+            when (row) {
+                is HomeList.Row.Header -> AdapterItem(ViewType.HEADER, headerText = row.text)
+                is HomeList.Row.App -> adapterItemForApp(
+                    row.app,
+                    forceNotif = row.forceNotificationPreview,
+                    favoriteFadeIndex = row.favoriteIndex,
+                )
+                HomeList.Row.Settings -> AdapterItem(ViewType.SETTINGS, headerText = SETTINGS_LETTER)
             }
-            favList.forEachIndexed { index, fav ->
-                items.add(adapterItemForApp(fav, favoriteFadeIndex = index))
-            }
-        }
-
-        // 1b. Active: apps with a live notification that aren't already a favorite.
-        // This temporary section surfaces apps like Gmail the moment something
-        // arrives and disappears again when the notification is cleared — so they
-        // no longer hide until you scrub or search. Home view only; the full
-        // alphabetical list below is already exhaustive while scrubbing.
-        if (!isAlphabetScrubbing && allApps.isNotEmpty()) {
-            val favIds = favList.map { it.id }.toSet()
-            val activePackages = NotificationRegistry.getActivePackages()
-            val activeApps = allApps.filter {
-                it.packageName in activePackages && it.id !in favIds
-            }
-            if (activeApps.isNotEmpty()) {
-                items.add(AdapterItem(ViewType.HEADER, headerText = getString(R.string.title_active)))
-                for (app in activeApps) {
-                    items.add(adapterItemForApp(app, forceNotif = true))
-                }
-            }
-        }
-
-        // 2. Add All Apps section ONLY when alphabet scrubbing is active
-        if (isAlphabetScrubbing && allApps.isNotEmpty()) {
-            items.add(AdapterItem(ViewType.HEADER, headerText = getString(R.string.title_all_apps)))
-            var currentHeader = ""
-            for (app in allApps) {
-                val firstChar = app.displayLabel.firstOrNull()?.uppercaseChar()?.toString() ?: "#"
-                if (firstChar != currentHeader) {
-                    currentHeader = firstChar
-                    items.add(AdapterItem(ViewType.HEADER, headerText = currentHeader))
-                }
-                items.add(adapterItemForApp(app))
-            }
-            // Settings shortcut at the very end of the alphabetical list
-            items.add(AdapterItem(ViewType.SETTINGS, headerText = SETTINGS_LETTER))
         }
 
         filteredList = items
