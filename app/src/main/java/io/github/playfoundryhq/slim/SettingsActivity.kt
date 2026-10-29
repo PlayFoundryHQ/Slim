@@ -18,7 +18,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.switchmaterial.SwitchMaterial
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -322,8 +324,11 @@ class SettingsActivity : AppCompatActivity() {
                 }
                 backup.put("apps", apps)
 
-                contentResolver.openOutputStream(uri)?.use { stream ->
-                    stream.write(backup.toString(2).toByteArray())
+                // The target may be a cloud provider (Drive etc.) — never block
+                // the main thread on it.
+                val bytes = backup.toString(2).toByteArray()
+                withContext(Dispatchers.IO) {
+                    contentResolver.openOutputStream(uri)?.use { stream -> stream.write(bytes) }
                 }
                 Toast.makeText(this@SettingsActivity, R.string.settings_export_done, Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
@@ -336,8 +341,10 @@ class SettingsActivity : AppCompatActivity() {
     private fun importBackup(uri: Uri) {
         lifecycleScope.launch {
             try {
-                val content = contentResolver.openInputStream(uri)?.use { stream ->
-                    stream.bufferedReader().readText()
+                val content = withContext(Dispatchers.IO) {
+                    contentResolver.openInputStream(uri)?.use { stream ->
+                        stream.bufferedReader().readText()
+                    }
                 } ?: throw IllegalStateException("Empty file")
 
                 val backup = JSONObject(content)
@@ -552,17 +559,25 @@ class SettingsActivity : AppCompatActivity() {
         fun badge(on: Boolean) =
             getString(if (on) R.string.settings_status_on else R.string.settings_status_off)
 
-        findViewById<TextView>(R.id.btnDefaultLauncher).text =
-            getString(R.string.settings_choose_home) + badge(DefaultLauncherHelper.isDefaultHome(this))
-
-        val listenerEnabled = Settings.Secure.getString(
-            contentResolver, "enabled_notification_listeners"
-        )?.contains(packageName) == true
-        findViewById<TextView>(R.id.btnNotificationAccess).text =
-            getString(R.string.settings_notification_permission) + badge(listenerEnabled)
-
-        findViewById<TextView>(R.id.btnBatteryOptimization).text =
-            getString(R.string.settings_battery_optimization) + badge(isIgnoringBatteryOptimizations())
+        // Role, settings-provider and power-manager lookups are Binder calls that
+        // can stall on a busy device; resolve them on IO, then paint the badges.
+        lifecycleScope.launch {
+            val (isHome, listenerEnabled, batteryExempt) = withContext(Dispatchers.IO) {
+                Triple(
+                    DefaultLauncherHelper.isDefaultHome(this@SettingsActivity),
+                    Settings.Secure.getString(
+                        contentResolver, "enabled_notification_listeners"
+                    )?.contains(packageName) == true,
+                    isIgnoringBatteryOptimizations()
+                )
+            }
+            findViewById<TextView>(R.id.btnDefaultLauncher).text =
+                getString(R.string.settings_choose_home) + badge(isHome)
+            findViewById<TextView>(R.id.btnNotificationAccess).text =
+                getString(R.string.settings_notification_permission) + badge(listenerEnabled)
+            findViewById<TextView>(R.id.btnBatteryOptimization).text =
+                getString(R.string.settings_battery_optimization) + badge(batteryExempt)
+        }
     }
 
     private fun bindAboutSection() {

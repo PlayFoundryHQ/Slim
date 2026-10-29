@@ -52,6 +52,15 @@ class WidgetHostManager(
     // ANRs. WidgetPagerView keeps every host view attached for its whole life.
     private var renderedWidgetIds: List<Int> = emptyList()
     private var pager: WidgetPagerView? = null
+    // Saved ids as of the last full render() pass, and whether the next call must
+    // re-query the system anyway (first run, package change, incomplete pass).
+    private var lastWantedIds: List<Int>? = null
+    @Volatile private var dirty = true
+
+    /** Forces the next [render] to re-check every widget with the system (e.g. after a package change). */
+    fun markDirty() {
+        dirty = true
+    }
 
     /** Begin receiving widget updates. Call from Activity.onStart. */
     fun startListening() {
@@ -80,17 +89,26 @@ class WidgetHostManager(
      * natural height.
      */
     fun render() {
+        // render() runs on every Home press, and the host/info lookups below are
+        // Binder calls on the main thread. Skip them entirely unless the saved
+        // list changed (Settings added/removed one), a package changed
+        // (markDirty), or the last pass was incomplete and needs a retry.
+        val wanted = prefs.widgetIds
+        if (!dirty && wanted == lastWantedIds) return
+
         // Only drop ids the host itself no longer knows (truly deallocated). A
         // plain getAppWidgetInfo() == null is often transient — an OEM freezer
         // briefly hides a just-added provider — and must NOT prune the list.
         val knownToHost = host.appWidgetIds.toHashSet()
-        val wanted = prefs.widgetIds
         val pruned = wanted.filter { it in knownToHost }
         if (pruned != wanted) prefs.widgetIds = pruned
 
         val infos = pruned.mapNotNull { id ->
             widgetManager.getAppWidgetInfo(id)?.let { id to it }
         }
+        lastWantedIds = pruned
+        // A provider that was transiently missing gets another look next resume.
+        dirty = infos.size != pruned.size
         if (infos.isEmpty()) {
             hide()
             return
