@@ -17,10 +17,11 @@
 ## ✨ Features
 
 *   **Wave Alphabet Scroll**: Drag along the screen edge to dynamically expand letters in an interactive wave, scrolling instantly to any application with micro-haptic feedback. Only letters that actually have apps are shown, keeping the index compact.
-*   **Floating Search Panel**: Swipe up from the home screen to open a floating search panel with live, relevance-ranked results (prefix matches first, then word matches, then any part of the name) and quick-launch chips for your recently searched apps.
-*   **Inline Notifications**: Read notification previews directly under your favorite apps on the home screen.
-*   **Home-Screen Widget**: Host one standard Android app widget (Duolingo streak, calendar, clock — anything on your device) in a slot above the app list. The slot sizes itself to each widget's natural shape and rounds it to a consistent card, so widgets of any aspect look right. Add, change, or remove it from Slim Settings.
-*   **Configurable Home Screen**: Toggle the clock, date, and weather independently; choose 12/24-hour time — all from Slim Settings.
+*   **Floating Search Panel**: Swipe up from the home screen to open a floating search panel with live, relevance-ranked results (prefix matches first, then word matches, then any part of the name) and your recently searched apps (with icons) when the query is empty.
+*   **Inline Notifications**: Read notification previews directly under your favorite apps on the home screen; apps with something new appear in a temporary *Active* section until it's cleared, and music shows as a now-playing row with album art. Optionally limit this to communication notifications (messages, calls, email, social).
+*   **Home-Screen Widgets**: Host up to five standard Android app widgets (Duolingo streak, calendar, clock — anything on your device) in a strip above the app list and swipe left/right between them. The strip sizes itself to each widget's natural shape and rounds it to a consistent card. Add or remove them from Slim Settings.
+*   **Configurable Home Screen**: Toggle the clock, date, and weather independently; choose 12/24-hour time; add a second *world clock* for another city — all from Slim Settings.
+*   **Focus Screen**: Long-press the clock to blank the phone down to a big clock (tap or swipe up to return). Opt-in; it never touches the lock screen.
 *   **Weather, your way**: Off, *Ambient* (an offline seasonal estimate — no network), or *Real weather* (opt-in, powered by the key-less [Open-Meteo](https://open-meteo.com) API for the city you choose).
 *   **Adaptive Readability**: Text colors automatically adapt to light or dark wallpapers, with Material You dynamic accent colors on Android 12+.
 *   **Work Profile Support**: Apps from your work profile appear in the list with a WORK badge and badged icon, and launch into the correct profile.
@@ -36,14 +37,15 @@ Slim has no persistent settings button cluttering the home screen. To open setti
 
 | Section | Options |
 |---|---|
-| Home Screen | Show/hide clock, show/hide date, 12/24-hour format |
-| Appearance | Show/hide app icons (text-only mode), background mode, immersive full-screen, manage hidden apps |
-| Widget | Add / change / remove one home-screen widget |
+| Home Screen | Show/hide clock, show/hide date, 12/24-hour format, world clock |
+| Appearance | Show/hide app icons (text-only mode), background mode, immersive full-screen, focus screen, manage hidden apps |
+| Widget | Add up to five home-screen widgets, remove them individually |
 | Weather | Off / Ambient (offline) / Real (Open-Meteo), city, °C/°F |
 | Search | Remember recent searches, clear history |
 | Gestures | Swipe-up search, swipe-down notification shade |
+| Notifications | Communication notifications only |
 | Backup & Restore | Export/import settings, favorites, hidden apps, and renames |
-| System | Set default launcher, notification access |
+| System | Set default launcher, notification access, keep Slim running in background (battery optimization) — each with a live on/off status |
 | About | Version, who we are, GitHub, website, report a bug, contact |
 
 ---
@@ -58,8 +60,11 @@ This repository is structured for Obsidian-based documentation and native Androi
     *   `SlimPreferences.kt`: All user-configurable options (SharedPreferences).
     *   `WeatherService.kt`: Optional Open-Meteo client (geocoding + current weather).
     *   `WaveGestureView.kt`: The wave alphabet index custom view.
-    *   `WidgetHostManager.kt`: Hosts and renders the optional home-screen app widget (`AppWidgetHost`).
-    *   `AppRepository.kt` / `AppDatabase.kt`: Room-backed app cache and favorites.
+    *   `WidgetHostManager.kt` / `WidgetPagerView.kt`: Host and render the home-screen widget strip (`AppWidgetHost`), swiped left/right.
+    *   `AppRepository.kt` / `AppDatabase.kt`: Room-backed app cache and favorites, synced from `LauncherApps` as a delta.
+    *   `HomeList.kt`: What the home list and search show (pure, unit-tested).
+    *   `IconLoader.kt`: Off-main-thread icon loading and cache.
+    *   `SlimNotificationListener.kt`: Notification previews, Active section and now-playing data.
 *   **`docs/`**: Obsidian knowledge vault detailing the project structure.
     *   [docs/index.md](docs/index.md): Central dashboard for requirements, architecture, and agent guides.
     *   [docs/architecture/system_requirements.md](docs/architecture/system_requirements.md): System permissions and components.

@@ -108,9 +108,9 @@ Slim Launcher is designed with a strict MVVM (Model-View-ViewModel) pattern usin
 > Extracting a ViewModel is a valid future refactor but is not a correctness gap.
 
 ### Data Flow Principles:
-1. **Unidirectional Data Flow (UDF)**: The UI fires events (e.g., app launched, search query changed) to the `HomeViewModel`. The ViewModel updates state flows which the UI observes.
-2. **Offline Caching**: App lists, search indexes, and custom tag mappings are cached in a SQLite database via **Room**. If `LauncherApps` broadcast indicates package install/removal, the Room cache updates asynchronously.
-3. **Lifecycle Awareness**: The `NotificationListenerService` runs as a background service, but communication to the UI is active *only* when the launcher activity is in the foreground (observed via Kotlin StateFlows).
+1. **Room is the source of truth for the app list**: `MainActivity` observes `allAppsFlow` / `favoritesFlow` and rebuilds the list from them (`HomeList.build`); UI events (favorite, hide, rename, launch count) write to Room and the flows push the result back.
+2. **Delta sync**: `AppRepository.refreshApps()` scans `LauncherApps` across profiles, diffs it against the cache (`AppSync.computeDelta`) and applies only inserts / label refreshes / deletes in one transaction (`AppDao.applyDelta`) — a no-op refresh writes nothing, so observers don't rebuild. Refreshes are triggered by `LauncherApps.Callback` (package events in every profile), managed-profile broadcasts, and a throttled `onResume` safety net. A paused or locked work profile is skipped, never treated as uninstalled.
+3. **Notifications**: `SlimNotificationListener` feeds `NotificationRegistry` (main thread, keyed per notification within each package) and re-seeds it from `activeNotifications` in `onListenerConnected`, so state survives the process being killed. `MainActivity` is the registry's single listener and debounces rebuilds; while stopped it only marks the list dirty.
 
 ---
 
@@ -205,8 +205,8 @@ does not interact with Android's secure Keyguard in any way. It is a `View`
 | A screen the user raises by a gesture while Slim is foreground | ✅ It is just your own window | **This is the focus screen** |
 
 No new permission, no service, no wake lock, no window-flag mutation, no
-broadcast receiver. Updated by the existing `clockTickRunnable`; raised only by
-an explicit long-press on the clock.
+extra broadcast receiver. Updated by the same minute tick as the header clock
+(`timeReceiver`); raised only by an explicit long-press on the clock.
 
 ## 🔋 Performance & Memory Constraints
 
@@ -216,8 +216,13 @@ an explicit long-press on the clock.
 - **Idle RAM Limit**: `< 75 MB`
 - **Scrolling Smoothness**: Must target constant `60 FPS` / `90 FPS` / `120 FPS` depending on display hardware.
 - **Draw Call Overhead**: Zero allocations in the drawing paths (`onDraw` of `WaveGestureView`).
-- **Bitmap Caching**: `AppListAdapter.iconCache` is a bounded `LruCache` (250 entries) rather than an unbounded map, so a device with a very large app list doesn't grow it indefinitely.
-- **Clock loop lifecycle**: The header clock/date tick is a self-rescheduling `Handler.postDelayed` runnable (`clockTickRunnable`) started in `onStart()` and stopped in `onStop()` — not a `java.util.Timer`. A `Timer` runs for the entire process lifetime regardless of Activity visibility, which for a launcher that can sit backgrounded for long stretches means a live per-second main-thread post doing nothing useful; it also showed up as "Slow UI thread" time in `dumpsys gfxinfo` competing with input handling. Any other periodic UI work added later should follow this same start/stop-with-lifecycle pattern, not a bare `Timer`.
+- **Icons never load on the main thread**: `IconLoader` resolves each row's launcher-activity icon (`LauncherApps.resolveActivity(...).getBadgedIcon(0)`, work badge included) on a background dispatcher, keeps a bounded `LruCache` (250 entries), and pre-warms it favorites-first after the app list loads. `onBindViewHolder` binds the cached icon or leaves the slot blank and fills it in (rows are tagged with the bound id so a recycled row never gets a late icon). A package change evicts that package's icons (`IconLoader.evictPackage`). Do not call `PackageManager.getApplicationIcon` from a bind path again — it was the main source of first-scrub stalls after a cold start.
+- **List diffs run off the main thread**: `AppListAdapter` uses `AsyncListDiffer`. Anything that needs adapter positions (letter scrolling) must read `adapter.currentItems` (the committed list) or run in the `updateItems(..., onCommitted)` callback — `filteredList` may not be on screen yet.
+- **Clock is minute-driven**: the header clock, world clock and focus screen update from `ACTION_TIME_TICK` / `ACTION_TIME_CHANGED` / `ACTION_TIMEZONE_CHANGED` (`timeReceiver`), and only `setText` when the text changed (`setTextIfChanged`) — `setText` on a wrap_content `TextView` requests a layout even for identical text. The main clock formatters are re-pinned to the device zone on a zone change (`applyDeviceTimeZone`). This replaced a 1 s handler loop.
+- **Receivers live only while visible**: the time and battery receivers register in `onStart` and unregister in `onStop`. A backgrounded launcher has nothing to draw, and every broadcast it holds wakes — on OxygenOS/ColorOS, thaws — the process. Notification events that arrive while stopped only set `adapterDirtyWhileStopped`; the list is rebuilt once in `onStart`. Any new periodic or broadcast-driven UI work must follow the same start/stop pattern.
+- **`onResume` stays Binder-free on a plain Home press**: `WidgetHostManager.render()` skips its host/info lookups unless the saved widget list changed, `markDirty()` was called (package change), or a provider was transiently missing; adaptive text colours are recomputed only from `WallpaperManager.OnColorsChangedListener`.
+- **Media notifications are parsed off the main thread**: `SlimNotificationListener` reads the MediaSession / large icon on a single background executor (stale results dropped by a per-key generation stamp) and downscales album art to 2× the icon slot.
+- **StrictMode in debug builds**: `MainActivity.onCreate` enables a log-only thread policy (disk, network, custom slow calls) when the app is debuggable. Check logcat for `StrictMode` after touching a hot path.
 - **Gesture thresholds are density-scaled**: swipe distance/velocity thresholds in `MainActivity` are computed once from `resources.displayMetrics.density` in `onCreate`, not hardcoded px constants — hardcoded px values are tuned for whatever density they were written on and drift on other screens.
 
 > [!NOTE] OEM background process freezers are a separate failure mode from ANRs

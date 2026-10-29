@@ -11,7 +11,9 @@ Slim is a minimalist Android launcher (home-replacement app). It is the primary 
 Key files:
 - `app/src/main/java/io/github/playfoundryhq/slim/MainActivity.kt` — single Activity; owns the full UI, lifecycle, and window management
 - `app/src/main/java/io/github/playfoundryhq/slim/WidgetHostManager.kt` — hosts the home-screen widget strip (1–5, swiped via `WidgetPagerView`)
-- `app/src/main/java/io/github/playfoundryhq/slim/AppRepository.kt` — app list; refreshes via `LauncherApps`
+- `app/src/main/java/io/github/playfoundryhq/slim/AppRepository.kt` — app list; delta-syncs from `LauncherApps` (`AppSync`)
+- `app/src/main/java/io/github/playfoundryhq/slim/HomeList.kt` — pure home-list / search ranking logic (unit-tested)
+- `app/src/main/java/io/github/playfoundryhq/slim/IconLoader.kt` — off-main-thread icon loading + cache
 - `app/src/main/java/io/github/playfoundryhq/slim/SlimPreferences.kt` — typed SharedPreferences wrapper
 - `app/src/main/java/io/github/playfoundryhq/slim/WaveGestureView.kt` — custom alphabet-scrubber view
 - `docs/architecture/` — human + agent architecture docs; keep in sync with code changes
@@ -49,6 +51,21 @@ The default-Home role chooser (`maybePromptDefaultLauncher()`) is the sharp edge
 - The chooser is driven from `onWindowFocusChanged(hasFocus=true)` + a `hasWindowFocus()` recheck on the main thread before `launch()`, **never** `onResume`.
 - It fires **once, ever** — guarded by `prefs.defaultLauncherPromptShown` (persisted, survives process death) as well as the in-memory `defaultHomePrompted`.
 - `DefaultLauncherHelper.isDefaultHome()` trusts `RoleManager.isRoleHeld(ROLE_HOME)` first; `resolveActivity(HOME)` alone gives false negatives right after a thaw. A single stale signal must never trigger the prompt.
+
+---
+
+## Main-thread / smoothness rules (mandatory)
+
+Measured on an emulator with ~280 apps, these removed ~20% of main-thread work and ~30% of the worst stall on a cold start. Do not regress them.
+
+- **Icons only through `IconLoader`** — never `PackageManager.getApplicationIcon` (or any icon resolve) in `onBindViewHolder`. Bind the cached icon or a blank slot; `IconLoader.load` fills it in. Evict on package change (`IconLoader.evictPackage`).
+- **List updates go through `AppListAdapter.updateItems`** (an `AsyncListDiffer`). Code that needs adapter positions reads `adapter.currentItems` or runs in the `onCommitted` callback — `filteredList` may still be diffing.
+- **No per-second work.** The clock is driven by `ACTION_TIME_TICK` (+ time/zone changes); update text with `setTextIfChanged`.
+- **Receivers and periodic work run only between `onStart` and `onStop`.** While stopped, mark state dirty and rebuild in `onStart`.
+- **A plain Home press does no Binder calls on the main thread** — keep `WidgetHostManager.render()`'s early exit (`dirty` / `lastWantedIds`) and only recompute adaptive colours from the wallpaper-colours listener.
+- **App-list sync writes only the delta** (`AppSync.computeDelta` → `AppDao.applyDelta`); never re-insert or blanket-delete. A paused/locked work profile is skipped, not treated as uninstalled.
+- **Notification state is keyed per notification** and re-seeded in `SlimNotificationListener.onListenerConnected()`; media parsing stays on the listener's background executor.
+- Debug builds log StrictMode violations — check logcat after touching a hot path.
 
 ---
 

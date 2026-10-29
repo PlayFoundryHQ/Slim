@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.LauncherApps
 import android.graphics.Bitmap
 import android.os.BatteryManager
 import android.graphics.drawable.ColorDrawable
@@ -14,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.UserHandle
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.GestureDetector
@@ -79,7 +81,11 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     private lateinit var txtFocusClock: TextView
     private lateinit var txtFocusDate: TextView
     private lateinit var txtFocusNotif: TextView
-    private var packageChangeReceiver: BroadcastReceiver? = null
+    private val launcherApps by lazy { getSystemService(Context.LAUNCHER_APPS_SERVICE) as LauncherApps }
+    private var launcherAppsCallback: LauncherApps.Callback? = null
+    private val profileReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) = scheduleAppRefresh()
+    }
     private var batteryReceiver: BroadcastReceiver? = null
     private var batteryReceiverRegistered = false
     private lateinit var widgetHost: WidgetHostManager
@@ -96,6 +102,13 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     private var allApps = listOf<AppItem>()
     private var favorites = listOf<AppItem>()
     private var filteredList = listOf<AdapterItem>()
+    private val homeTitles by lazy {
+        HomeList.Titles(
+            favorites = getString(R.string.title_favorites),
+            active = getString(R.string.title_active),
+            allApps = getString(R.string.title_all_apps),
+        )
+    }
 
     private lateinit var gestureDetector: GestureDetector
 
@@ -138,7 +151,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     // to throttle retries so a failing endpoint doesn't get hammered.
     private var lastWeatherAttemptTime = 0L
     // Last time onResume kicked a full app refresh. Package install/remove comes
-    // in through PackageChangeReceiver, so the only job of the onResume refresh
+    // in through the LauncherApps callback, so the only job of the onResume refresh
     // is to catch the rare case the broadcast was missed (Slim not registered
     // yet during a fast install). Doing the refresh + its two retries on every
     // single Home press was a LauncherApps query storm on the hot resume path.
@@ -394,11 +407,33 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
             }
         }
 
-        // Register for package install/remove broadcasts so newly installed
-        // apps appear immediately without waiting for the next onResume cycle.
-        val receiver = PackageChangeReceiver { scheduleAppRefresh() }
-        packageChangeReceiver = receiver
-        registerReceiver(receiver, PackageChangeReceiver.createIntentFilter())
+        // Package changes in ANY profile (installs, updates, removals, enable/
+        // disable, suspend) — the PACKAGE_* broadcasts only ever covered the
+        // personal profile. An update can change an app's icon, so its cached
+        // icons are dropped before the list refreshes.
+        val callback = object : LauncherApps.Callback() {
+            override fun onPackageAdded(packageName: String, user: UserHandle) = handlePackageChange(packageName)
+            override fun onPackageRemoved(packageName: String, user: UserHandle) = handlePackageChange(packageName)
+            override fun onPackageChanged(packageName: String, user: UserHandle) = handlePackageChange(packageName)
+            override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) =
+                packageNames.forEach { handlePackageChange(it) }
+            override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) =
+                packageNames.forEach { handlePackageChange(it) }
+            override fun onPackagesSuspended(packageNames: Array<out String>, user: UserHandle) =
+                packageNames.forEach { handlePackageChange(it) }
+            override fun onPackagesUnsuspended(packageNames: Array<out String>, user: UserHandle) =
+                packageNames.forEach { handlePackageChange(it) }
+        }
+        launcherAppsCallback = callback
+        launcherApps.registerCallback(callback, handler)
+        // Work profile switched on/off, unlocked, added or removed.
+        registerReceiver(profileReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_MANAGED_PROFILE_AVAILABLE)
+            addAction(Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE)
+            addAction(Intent.ACTION_MANAGED_PROFILE_UNLOCKED)
+            addAction(Intent.ACTION_MANAGED_PROFILE_ADDED)
+            addAction(Intent.ACTION_MANAGED_PROFILE_REMOVED)
+        })
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             val listener = WallpaperManager.OnColorsChangedListener { _, which ->
@@ -713,7 +748,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         searchAdapter.setShowIcons(prefs.showAppIcons)
         updateWeather()
         // Pick up newly installed/removed apps — with retry for timing (F-Droid etc.).
-        // Throttled: PackageChangeReceiver is the real-time path, this is only a
+        // Throttled: the LauncherApps callback is the real-time path, this is only a
         // safety net, so it need not fire on every Home press.
         val now = System.currentTimeMillis()
         if (now - lastResumeRefreshTime > RESUME_REFRESH_INTERVAL_MS) {
@@ -760,6 +795,12 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
      * Retries fire ONCE each (no infinite loop) to avoid spamming
      * notifyDataSetChanged and breaking swipe gestures.
      */
+    /** A package changed in some profile: drop its cached icons, then refresh the list. */
+    private fun handlePackageChange(packageName: String) {
+        iconLoader.evictPackage(packageName)
+        scheduleAppRefresh()
+    }
+
     private fun scheduleAppRefresh() {
         // A widget's provider app may have been updated or removed.
         widgetHost.markDirty()
@@ -1131,8 +1172,8 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         handler.removeCallbacks(refreshRetry1)
         handler.removeCallbacks(refreshRetry2)
         NotificationRegistry.unregisterListener()
-        packageChangeReceiver?.let { runCatching { unregisterReceiver(it) } }
-        (packageChangeReceiver as? PackageChangeReceiver)?.destroy()
+        launcherAppsCallback?.let { runCatching { launcherApps.unregisterCallback(it) } }
+        runCatching { unregisterReceiver(profileReceiver) }
         if (batteryReceiverRegistered) batteryReceiver?.let { runCatching { unregisterReceiver(it) } }
         batteryReceiverRegistered = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -1260,9 +1301,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     /** Keeps the alphabet index compact: only letters that actually have apps. */
     private fun updateAlphabetLetters() {
         if (allApps.isEmpty()) return
-        val letters = allApps
-            .map { it.displayLabel.firstOrNull()?.uppercaseChar()?.toString() ?: "#" }
-            .distinct()
+        val letters = allApps.map { HomeList.indexLetter(it) }.distinct()
         // The settings gear used to live here, but sitting right after the last
         // letter it was easy to mis-tap on scrub-release. Settings is still
         // reachable via the row at the end of the all-apps list and the Slim
@@ -1325,20 +1364,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         }
         historyScroll.visibility = View.GONE
 
-        val q = query.lowercase(Locale.getDefault())
-        val ranked = allApps.mapNotNull { app ->
-            val label = app.displayLabel.lowercase(Locale.getDefault())
-            val rank = when {
-                label.startsWith(q) -> 0
-                label.split(' ', '-', '_', '.').any { it.startsWith(q) } -> 1
-                label.contains(q) -> 2
-                else -> return@mapNotNull null
-            }
-            Pair(rank, app)
-        }
-            .sortedWith(compareBy({ it.first }, { it.second.displayLabel.lowercase(Locale.getDefault()) }))
-            .map { it.second }
-
+        val ranked = SearchRanker.rank(allApps, query)
         val items = ranked.map { adapterItemForApp(it) }
         searchAdapter.updateItems(items)
         txtNoResults.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
@@ -1362,59 +1388,23 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
 
     // Merge Favorites and All Apps into custom RecyclerView elements
     private fun updateAdapterData() {
-        val items = mutableListOf<AdapterItem>()
-
-        // 1. Add Favorites section (Limited to top 5 manually selected OR dynamically tracked favorites)
-        var favList = favorites.take(5)
-        if (favList.isEmpty() && allApps.isNotEmpty()) {
-            favList = allApps.sortedByDescending { it.launchCount }.take(5).filter { it.launchCount > 0 }
-        }
-
-        if (favList.isNotEmpty()) {
-            // On the home view the list *is* your favorites — the header is just
-            // noise. Keep it only while scrubbing, where it separates them from
-            // the "All Apps" section below.
-            if (isAlphabetScrubbing) {
-                items.add(AdapterItem(ViewType.HEADER, headerText = getString(R.string.title_favorites)))
+        val rows = HomeList.build(
+            favorites = favorites,
+            allApps = allApps,
+            activePackages = NotificationRegistry.getActivePackages(),
+            scrubbing = isAlphabetScrubbing,
+            titles = homeTitles,
+        )
+        val items = rows.map { row ->
+            when (row) {
+                is HomeList.Row.Header -> AdapterItem(ViewType.HEADER, headerText = row.text)
+                is HomeList.Row.App -> adapterItemForApp(
+                    row.app,
+                    forceNotif = row.forceNotificationPreview,
+                    favoriteFadeIndex = row.favoriteIndex,
+                )
+                HomeList.Row.Settings -> AdapterItem(ViewType.SETTINGS, headerText = SETTINGS_LETTER)
             }
-            favList.forEachIndexed { index, fav ->
-                items.add(adapterItemForApp(fav, favoriteFadeIndex = index))
-            }
-        }
-
-        // 1b. Active: apps with a live notification that aren't already a favorite.
-        // This temporary section surfaces apps like Gmail the moment something
-        // arrives and disappears again when the notification is cleared — so they
-        // no longer hide until you scrub or search. Home view only; the full
-        // alphabetical list below is already exhaustive while scrubbing.
-        if (!isAlphabetScrubbing && allApps.isNotEmpty()) {
-            val favIds = favList.map { it.id }.toSet()
-            val activePackages = NotificationRegistry.getActivePackages()
-            val activeApps = allApps.filter {
-                it.packageName in activePackages && it.id !in favIds
-            }
-            if (activeApps.isNotEmpty()) {
-                items.add(AdapterItem(ViewType.HEADER, headerText = getString(R.string.title_active)))
-                for (app in activeApps) {
-                    items.add(adapterItemForApp(app, forceNotif = true))
-                }
-            }
-        }
-
-        // 2. Add All Apps section ONLY when alphabet scrubbing is active
-        if (isAlphabetScrubbing && allApps.isNotEmpty()) {
-            items.add(AdapterItem(ViewType.HEADER, headerText = getString(R.string.title_all_apps)))
-            var currentHeader = ""
-            for (app in allApps) {
-                val firstChar = app.displayLabel.firstOrNull()?.uppercaseChar()?.toString() ?: "#"
-                if (firstChar != currentHeader) {
-                    currentHeader = firstChar
-                    items.add(AdapterItem(ViewType.HEADER, headerText = currentHeader))
-                }
-                items.add(adapterItemForApp(app))
-            }
-            // Settings shortcut at the very end of the alphabetical list
-            items.add(AdapterItem(ViewType.SETTINGS, headerText = SETTINGS_LETTER))
         }
 
         filteredList = items
