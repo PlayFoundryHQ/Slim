@@ -155,8 +155,8 @@ So the focus screen:
   `FLAG_SHOW_WHEN_LOCKED` / `setShowWhenLocked`, no window-flag mutation, no
   service, no wake lock, no new permission;
 - is raised only by an explicit long-press on `txtClock`, and updated by the
-  existing `clockTickRunnable` — no periodic work beyond the clock tick that
-  already runs while Slim is resumed.
+  same minute tick (`ACTION_TIME_TICK`) as the header clock — no periodic work
+  of its own.
 
 It is a self-imposed "blank the phone down to a clock, right now" toggle,
 implemented within what the platform actually allows.
@@ -204,7 +204,7 @@ The notification-count and battery chips (immersive mode only) live in their own
 
 ## 👔 Work Profile Support
 
-App identity is `packageName/className/userSerial`, so the same package can exist in both the personal and work profile. `AppRepository.refreshApps()` iterates `LauncherApps.getProfiles()`, tags each app with its profile's serial number, and launches via `LauncherApps.startMainActivity()` with the correct `UserHandle`. Work apps show a **WORK** badge and a system-badged icon.
+App identity is `packageName/className/userSerial`, so the same package can exist in both the personal and work profile. `AppRepository.refreshApps()` iterates `LauncherApps.getProfiles()`, tags each app with its profile's serial number, and launches via `LauncherApps.startMainActivity()` with the correct `UserHandle`. Work apps show a **WORK** badge and a system-badged icon. Package changes inside the work profile arrive through `LauncherApps.Callback`, and the work profile being switched on/off or unlocked (`ACTION_MANAGED_PROFILE_*`) triggers a refresh. While the profile is paused or locked its apps are skipped by the sync rather than deleted, so their favorites, hidden flags and renames are kept.
 
 ## 🙈 Hide & Rename
 
