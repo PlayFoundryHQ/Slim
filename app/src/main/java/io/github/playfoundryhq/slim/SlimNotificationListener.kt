@@ -4,12 +4,31 @@ import android.app.Notification
 import android.graphics.Bitmap
 import android.media.session.MediaController
 import android.media.session.MediaSession
+import android.os.Handler
+import android.os.Looper
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import java.util.concurrent.Executors
 
 class SlimNotificationListener : NotificationListenerService() {
 
     private val prefs by lazy { SlimPreferences(this) }
+
+    // Listener callbacks arrive on the main thread — the same one drawing the
+    // home screen. Reading a MediaSession (Binder) and decoding album art there
+    // stalled frames every time a player updated its notification, so media
+    // extraction runs on this single background thread instead.
+    private val mediaExecutor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    // Bumped per package on every media post/removal (main thread only); a
+    // background result is dropped if a newer event for that package came in,
+    // so a slow extraction can't resurrect a row that was just removed.
+    private val mediaGeneration = HashMap<String, Int>()
+
+    override fun onDestroy() {
+        mediaExecutor.shutdownNow()
+        super.onDestroy()
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val packageName = sbn.packageName
@@ -19,9 +38,15 @@ class SlimNotificationListener : NotificationListenerService() {
         //    routed to the dedicated media row BEFORE the noise filter below, or
         //    the now-playing row would never appear.
         if (isMedia(n)) {
-            val info = extractMedia(n)
-            if (info != null) {
-                NotificationRegistry.updateMedia(packageName, info)
+            val generation = (mediaGeneration[packageName] ?: 0) + 1
+            mediaGeneration[packageName] = generation
+            mediaExecutor.execute {
+                val info = runCatching { extractMedia(n) }.getOrNull() ?: return@execute
+                mainHandler.post {
+                    if (mediaGeneration[packageName] == generation) {
+                        NotificationRegistry.updateMedia(packageName, info)
+                    }
+                }
             }
             return
         }
@@ -60,6 +85,7 @@ class SlimNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        mediaGeneration[sbn.packageName] = (mediaGeneration[sbn.packageName] ?: 0) + 1
         NotificationRegistry.removeNotification(sbn.packageName)
         NotificationRegistry.removeMedia(sbn.packageName)
     }
@@ -94,7 +120,7 @@ class SlimNotificationListener : NotificationListenerService() {
                     val art = md.getBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART)
                         ?: md.getBitmap(android.media.MediaMetadata.METADATA_KEY_ART)
                     if (!title.isNullOrEmpty()) {
-                        return MediaInfo(title, artist, art)
+                        return MediaInfo(title, artist, art?.let { downscale(it) })
                     }
                 }
             } catch (_: Exception) {
@@ -110,7 +136,24 @@ class SlimNotificationListener : NotificationListenerService() {
         } catch (_: Exception) {
             null
         }
-        return MediaInfo(title, artist, art)
+        return MediaInfo(title, artist, art?.let { downscale(it) })
+    }
+
+    /**
+     * Album art arrives at full resolution (often 1000px+, megabytes each) but is
+     * drawn in a 34dp icon slot; keep a copy at twice that size instead.
+     */
+    private fun downscale(bitmap: Bitmap): Bitmap {
+        val maxPx = (ART_SIZE_DP * resources.displayMetrics.density).toInt()
+        val largest = maxOf(bitmap.width, bitmap.height)
+        if (largest <= maxPx) return bitmap
+        val scale = maxPx.toFloat() / largest
+        return Bitmap.createScaledBitmap(
+            bitmap,
+            (bitmap.width * scale).toInt().coerceAtLeast(1),
+            (bitmap.height * scale).toInt().coerceAtLeast(1),
+            true
+        )
     }
 
     private fun drawableToBitmap(drawable: android.graphics.drawable.Drawable): Bitmap? {
@@ -129,6 +172,9 @@ class SlimNotificationListener : NotificationListenerService() {
     private fun isCommunication(category: String?): Boolean = category in COMMUNICATION_CATEGORIES
 
     companion object {
+        /** Album art is kept at this size (2× the 34dp icon slot). */
+        private const val ART_SIZE_DP = 68
+
         // "missed_call" is referenced as a literal so the listener still compiles
         // on minSdk 26 (Notification.CATEGORY_MISSED_CALL is API 33+).
         private val COMMUNICATION_CATEGORIES = setOf(

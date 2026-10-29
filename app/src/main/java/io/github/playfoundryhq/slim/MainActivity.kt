@@ -7,11 +7,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.BatteryManager
 import android.graphics.drawable.ColorDrawable
-import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -35,6 +33,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.graphics.ColorUtils
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.AsyncListDiffer
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -91,6 +90,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     private lateinit var prefs: SlimPreferences
     private lateinit var adapter: AppListAdapter
     private lateinit var searchAdapter: AppListAdapter
+    private lateinit var iconLoader: IconLoader
     private val weatherService = WeatherService()
 
     private var allApps = listOf<AppItem>()
@@ -168,29 +168,42 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     private val worldClockTime24Format = SimpleDateFormat("HH:mm", Locale.getDefault())
     private val worldClockTime12Format = SimpleDateFormat("h:mm a", Locale.getDefault())
     private var appliedWorldClockTimeZoneId = ""
-    private var clockTicks = 0
     // Debounce adapter rebuilds triggered by rapid notification events (e.g. music player).
     private val pendingAdapterUpdate = Runnable { updateAdapterData() }
-    // Self-rescheduling clock tick — started in onStart, stopped in onStop, so it
-    // never runs (and never competes with input on the main thread) while Slim is
-    // backgrounded. Previously a java.util.Timer that ran for the entire process
-    // lifetime regardless of visibility, which is wasteful for a launcher that can
-    // sit backgrounded for days and showed up as main-thread jank ("Slow UI thread")
-    // in dumpsys gfxinfo.
-    private val clockTickRunnable = object : Runnable {
-        override fun run() {
-            val now = Date()
-            txtClock.text = (if (prefs.use24HourFormat) clockTime24Format else clockTime12Format).format(now)
-            txtDate.text = clockDateFormat.format(now)
-            updateWorldClockText()
-            updateFocusScreenText()
-            // Weather has its own 60s cache; no need to check on every tick.
-            if (++clockTicks % 60 == 0) updateWeather()
-            handler.postDelayed(this, 1000)
+    // Set when a list-affecting event (notification) arrives while Slim isn't
+    // visible; the rebuild is deferred to onStart instead of done in the background.
+    private var adapterDirtyWhileStopped = false
+    // Letter the user scrubbed to whose header isn't on screen yet (the list it
+    // belongs to is still diffing); applied when that list commits.
+    private var pendingScrollLetter: String? = null
+    // Minute-driven clock: the system's ACTION_TIME_TICK (sent on each minute
+    // boundary) plus time/zone changes, registered only while visible. This
+    // replaced a 1-second handler loop whose setText calls re-laid-out the header
+    // every second even though the text only changes once a minute.
+    private val timeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_TIMEZONE_CHANGED) applyDeviceTimeZone()
+            updateClock()
+            if (intent?.action == Intent.ACTION_TIME_TICK) updateWeather()
         }
     }
+    private var timeReceiverRegistered = false
+    // The wallpaper's colours decide the text palette; recomputed only when the
+    // wallpaper actually changes rather than re-queried on every Home press.
+    private var adaptiveColorsApplied = false
+    private var wallpaperColorsListener: WallpaperManager.OnColorsChangedListener? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Debug builds log any disk/network/slow call that lands on the main
+        // thread, so a hot-path regression shows up in logcat before it ships.
+        if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            android.os.StrictMode.setThreadPolicy(
+                android.os.StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads().detectDiskWrites().detectNetwork().detectCustomSlowCalls()
+                    .penaltyLog()
+                    .build()
+            )
+        }
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
@@ -238,7 +251,8 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         widgetHost = WidgetHostManager(this, widgetContainer, prefs)
 
         // Set up home RecyclerView (Favorites + alphabetical browsing)
-        adapter = AppListAdapter(this, emptyList()) { appItem, isLongClick ->
+        iconLoader = IconLoader(this, lifecycleScope)
+        adapter = AppListAdapter(this, iconLoader) { appItem, isLongClick ->
             if (isLongClick) {
                 showAppOptionsDialog(appItem)
             } else {
@@ -256,7 +270,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         appRecyclerView.itemAnimator = null
 
         // Set up search results RecyclerView (inside the floating search panel)
-        searchAdapter = AppListAdapter(this, emptyList()) { appItem, isLongClick ->
+        searchAdapter = AppListAdapter(this, iconLoader) { appItem, isLongClick ->
             if (isLongClick) {
                 showAppOptionsDialog(appItem)
             } else {
@@ -365,6 +379,9 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
                     allApps = apps.sortedBy { it.displayLabel.lowercase(Locale.getDefault()) }
                     updateAlphabetLetters()
                     updateAdapterData()
+                    // Resolve icons in the background, favorites first, so the
+                    // first scrub after a cold start binds rows without waiting.
+                    iconLoader.prewarm(favorites + allApps)
                 }
             }
 
@@ -382,6 +399,14 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         val receiver = PackageChangeReceiver { scheduleAppRefresh() }
         packageChangeReceiver = receiver
         registerReceiver(receiver, PackageChangeReceiver.createIntentFilter())
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            val listener = WallpaperManager.OnColorsChangedListener { _, which ->
+                if (which and WallpaperManager.FLAG_SYSTEM != 0) applyAdaptiveColors()
+            }
+            wallpaperColorsListener = listener
+            WallpaperManager.getInstance(this).addOnColorsChangedListener(listener, handler)
+        }
     }
 
     /**
@@ -593,8 +618,56 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     override fun onStart() {
         super.onStart()
         widgetHost.startListening()
-        handler.removeCallbacks(clockTickRunnable)
-        handler.post(clockTickRunnable)
+        // Receivers live only while Slim is visible: a backgrounded launcher has
+        // nothing to draw, and every broadcast it holds wakes (or, on OxygenOS/
+        // ColorOS, thaws) the process for nothing.
+        if (!timeReceiverRegistered) {
+            registerReceiver(timeReceiver, IntentFilter().apply {
+                addAction(Intent.ACTION_TIME_TICK)
+                addAction(Intent.ACTION_TIME_CHANGED)
+                addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            })
+            timeReceiverRegistered = true
+        }
+        // The zone may have changed while we were stopped and not listening.
+        applyDeviceTimeZone()
+        updateClock()
+        if (prefs.immersiveMode && !batteryReceiverRegistered) {
+            val receiver = batteryReceiver ?: object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    updateBatteryLevel()
+                }
+            }.also { batteryReceiver = it }
+            registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            batteryReceiverRegistered = true
+        }
+        if (adapterDirtyWhileStopped) {
+            adapterDirtyWhileStopped = false
+            updateAdapterData()
+        }
+    }
+
+    /** Clock, date, world clock and focus screen — only touches views whose text changed. */
+    private fun updateClock() {
+        val now = Date()
+        setTextIfChanged(txtClock, (if (prefs.use24HourFormat) clockTime24Format else clockTime12Format).format(now))
+        setTextIfChanged(txtDate, clockDateFormat.format(now))
+        updateWorldClockText()
+        updateFocusScreenText()
+    }
+
+    /** Re-pins the main clock formatters to the device's current time zone. */
+    private fun applyDeviceTimeZone() {
+        val tz = TimeZone.getDefault()
+        clockDateFormat.timeZone = tz
+        clockTime24Format.timeZone = tz
+        clockTime12Format.timeZone = tz
+    }
+
+    // setText always requests a layout for wrap_content TextViews, even with
+    // identical text; skipping no-op updates keeps the header out of layout passes.
+    private fun setTextIfChanged(view: TextView, text: CharSequence) {
+        if (view.text.toString() != text.toString()) view.text = text
     }
 
     override fun onPause() {
@@ -617,7 +690,14 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     override fun onStop() {
         super.onStop()
         widgetHost.stopListening()
-        handler.removeCallbacks(clockTickRunnable)
+        if (timeReceiverRegistered) {
+            runCatching { unregisterReceiver(timeReceiver) }
+            timeReceiverRegistered = false
+        }
+        if (batteryReceiverRegistered) {
+            batteryReceiver?.let { runCatching { unregisterReceiver(it) } }
+            batteryReceiverRegistered = false
+        }
     }
 
     override fun onResume() {
@@ -625,7 +705,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         // Re-render in case a widget was added/removed/changed in Settings.
         widgetHost.render()
         applyHeaderPreferences()
-        applyAdaptiveColors()
+        if (!adaptiveColorsApplied) applyAdaptiveColors()
         applyBackgroundMode()
         applyImmersiveMode()
         // Appearance / weather settings may have changed in Settings
@@ -670,19 +750,6 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
                 searchEditText.setText("")
             }
         }
-
-        // Battery level receiver for real-time updates (register once, not on every resume)
-        if (prefs.immersiveMode && !batteryReceiverRegistered) {
-            if (batteryReceiver == null) {
-                batteryReceiver = object : BroadcastReceiver() {
-                    override fun onReceive(context: Context?, intent: Intent?) {
-                        updateBatteryLevel()
-                    }
-                }
-            }
-            registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            batteryReceiverRegistered = true
-        }
     }
 
     /**
@@ -694,6 +761,8 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
      * notifyDataSetChanged and breaking swipe gestures.
      */
     private fun scheduleAppRefresh() {
+        // A widget's provider app may have been updated or removed.
+        widgetHost.markDirty()
         // Cancel any pending retries (call-site may have changed)
         handler.removeCallbacks(refreshRetry1)
         handler.removeCallbacks(refreshRetry2)
@@ -755,7 +824,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         if (txtWorldClock.visibility != View.VISIBLE) return
         val now = Date()
         val time = (if (prefs.use24HourFormat) worldClockTime24Format else worldClockTime12Format).format(now)
-        txtWorldClock.text = "$time · ${prefs.worldClockLabel}"
+        setTextIfChanged(txtWorldClock, "$time · ${prefs.worldClockLabel}")
     }
 
     private fun updateWeather() {
@@ -868,6 +937,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
      * Do the query on IO, then apply the resolved palette on the main thread.
      */
     private fun applyAdaptiveColors() {
+        adaptiveColorsApplied = true
         lifecycleScope.launch {
             val useDarkText = withContext(Dispatchers.IO) {
                 var dark = false
@@ -1056,7 +1126,6 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
 
     override fun onDestroy() {
         super.onDestroy()
-        handler.removeCallbacks(clockTickRunnable)
         handler.removeCallbacks(returnToFavoritesRunnable)
         handler.removeCallbacks(pendingAdapterUpdate)
         handler.removeCallbacks(refreshRetry1)
@@ -1064,8 +1133,13 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         NotificationRegistry.unregisterListener()
         packageChangeReceiver?.let { runCatching { unregisterReceiver(it) } }
         (packageChangeReceiver as? PackageChangeReceiver)?.destroy()
-        batteryReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        if (batteryReceiverRegistered) batteryReceiver?.let { runCatching { unregisterReceiver(it) } }
         batteryReceiverRegistered = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            wallpaperColorsListener?.let {
+                WallpaperManager.getInstance(this).removeOnColorsChangedListener(it)
+            }
+        }
     }
 
     /**
@@ -1170,6 +1244,11 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         // Debounce: music players can fire rapid-fire notification updates; coalesce
         // into a single adapter rebuild per 100ms to avoid cascading frame drops.
         handler.post {
+            // Not visible: nothing to redraw now — rebuild once in onStart.
+            if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+                adapterDirtyWhileStopped = true
+                return@post
+            }
             handler.removeCallbacks(pendingAdapterUpdate)
             handler.postDelayed(pendingAdapterUpdate, 100)
             if (prefs.immersiveMode) updateNotificationSummary()
@@ -1204,13 +1283,25 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
 
         txtLetterPopup.visibility = View.VISIBLE
         txtLetterPopup.text = letter
+        scrollToLetter(letter)
+    }
 
-        val targetIndex = filteredList.indexOfFirst { item ->
+    /**
+     * Scrolls the list to [letter]'s header. Looks it up in the list that is on
+     * screen — the full alphabetical list is diffed off the main thread, so right
+     * after scrubbing starts it may not be committed yet; in that case the scroll
+     * is parked and replayed when it lands (see [updateAdapterData]).
+     */
+    private fun scrollToLetter(letter: String) {
+        val targetIndex = adapter.currentItems.indexOfFirst { item ->
             item.type == ViewType.HEADER && item.headerText.equals(letter, ignoreCase = true)
         }
         if (targetIndex != -1) {
+            pendingScrollLetter = null
             (appRecyclerView.layoutManager as LinearLayoutManager)
                 .scrollToPositionWithOffset(targetIndex, 0)
+        } else {
+            pendingScrollLetter = letter
         }
     }
 
@@ -1327,7 +1418,10 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         }
 
         filteredList = items
-        adapter.updateItems(filteredList)
+        adapter.updateItems(filteredList) {
+            // A scrub that started before this list was on screen.
+            pendingScrollLetter?.let { if (isAlphabetScrubbing) scrollToLetter(it) else pendingScrollLetter = null }
+        }
     }
 
     private fun showAppOptionsDialog(appItem: AppItem) {
@@ -1430,16 +1524,23 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
 
     class AppListAdapter(
         private val context: Context,
-        private var items: List<AdapterItem>,
+        private val iconLoader: IconLoader,
         private val clickListener: (AppItem, Boolean) -> Unit
     ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-        private val pm: PackageManager = context.packageManager
-        private val userManager =
-            context.getSystemService(Context.USER_SERVICE) as android.os.UserManager
-        // Bounded so a device with hundreds of apps doesn't grow this indefinitely —
-        // it was a plain HashMap that never evicted.
-        private val iconCache = android.util.LruCache<String, Drawable>(ICON_CACHE_SIZE)
+        // Diffs run on a background thread — the full alphabetical list is a few
+        // hundred rows and is rebuilt on every notification burst, which made a
+        // main-thread DiffUtil pass a regular source of dropped frames.
+        private val differ = AsyncListDiffer(this, AdapterItemCallback)
+        private val items: List<AdapterItem> get() = differ.currentList
+
+        // Slim's own launcher entry, used for the Settings row's icon.
+        private val slimEntry = AppItem(
+            id = "${context.packageName}/${MainActivity::class.java.name}/settings",
+            packageName = context.packageName,
+            className = MainActivity::class.java.name,
+            label = ""
+        )
 
         // Adaptive palette (kept readable on any wallpaper)
         private var primaryTextColor = context.getColor(R.color.text_primary)
@@ -1449,10 +1550,12 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         // Text-only mode (Settings > Appearance)
         private var showIcons = true
 
-        fun updateItems(newItems: List<AdapterItem>) {
-            val diff = DiffUtil.calculateDiff(AdapterDiffCallback(items, newItems))
-            items = newItems
-            diff.dispatchUpdatesTo(this)
+        /** The list currently on screen (the last submitted one may still be diffing). */
+        val currentItems: List<AdapterItem> get() = differ.currentList
+
+        /** Diffs [newItems] off the main thread; [onCommitted] runs once they're on screen. */
+        fun updateItems(newItems: List<AdapterItem>, onCommitted: Runnable? = null) {
+            differ.submitList(newItems, onCommitted)
         }
 
         fun setTextColors(primary: Int, secondary: Int, accent: Int) {
@@ -1523,20 +1626,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
                     holder.appIcon.visibility = View.GONE
                 } else {
                     holder.appIcon.visibility = View.VISIBLE
-                    val icon = iconCache.get(app.id) ?: try {
-                        var resolvedIcon = pm.getApplicationIcon(app.packageName)
-                        if (app.isWorkProfile) {
-                            val user = userManager.getUserForSerialNumber(app.userSerial)
-                            if (user != null) {
-                                resolvedIcon = pm.getUserBadgedIcon(resolvedIcon, user)
-                            }
-                        }
-                        iconCache.put(app.id, resolvedIcon)
-                        resolvedIcon
-                    } catch (e: Exception) {
-                        context.getDrawable(android.R.drawable.sym_def_app_icon)
-                    }
-                    holder.appIcon.setImageDrawable(icon)
+                    bindIcon(holder.appIcon, app)
                 }
 
                 when {
@@ -1594,12 +1684,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
                     holder.appIcon.visibility = View.GONE
                 } else {
                     holder.appIcon.visibility = View.VISIBLE
-                    val slimIcon = iconCache.get(context.packageName) ?: runCatching {
-                        pm.getApplicationIcon(context.packageName)
-                    }.getOrNull()?.also { iconCache.put(context.packageName, it) }
-                    holder.appIcon.setImageDrawable(
-                        slimIcon ?: context.getDrawable(android.R.drawable.sym_def_app_icon)
-                    )
+                    bindIcon(holder.appIcon, slimEntry)
                 }
                 holder.appName.text = context.getString(R.string.settings_title)
                 holder.appName.setTextColor(accentColor)
@@ -1615,6 +1700,24 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         }
 
         override fun getItemCount(): Int = items.size
+
+        /**
+         * Shows [app]'s cached icon, or leaves the slot blank and fills it in when
+         * [IconLoader] has it. The view is tagged with the id it's bound to so a
+         * recycled row never receives a late icon meant for its previous app.
+         */
+        private fun bindIcon(view: ImageView, app: AppItem) {
+            view.tag = app.id
+            val cached = iconLoader.cached(app)
+            if (cached != null) {
+                view.setImageDrawable(cached)
+                return
+            }
+            view.setImageDrawable(null)
+            iconLoader.load(app) { icon ->
+                if (view.tag == app.id) view.setImageDrawable(icon)
+            }
+        }
 
         class HeaderViewHolder(view: View) : RecyclerView.ViewHolder(view)
         class AppViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -1633,14 +1736,8 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
             val notificationCount: TextView = view.findViewById(R.id.txtNotificationCount)
         }
 
-        private class AdapterDiffCallback(
-            private val oldList: List<AdapterItem>,
-            private val newList: List<AdapterItem>
-        ) : DiffUtil.Callback() {
-            override fun getOldListSize() = oldList.size
-            override fun getNewListSize() = newList.size
-            override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean {
-                val o = oldList[oldPos]; val n = newList[newPos]
+        private object AdapterItemCallback : DiffUtil.ItemCallback<AdapterItem>() {
+            override fun areItemsTheSame(o: AdapterItem, n: AdapterItem): Boolean {
                 if (o.type != n.type) return false
                 return when (o.type) {
                     ViewType.APP -> o.appItem?.id == n.appItem?.id
@@ -1648,14 +1745,10 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
                     ViewType.SETTINGS -> true
                 }
             }
-            override fun areContentsTheSame(oldPos: Int, newPos: Int) =
-                oldList[oldPos] == newList[newPos]
+            override fun areContentsTheSame(o: AdapterItem, n: AdapterItem) = o == n
         }
 
         companion object {
-            /** Max resolved-icon Drawables kept in memory at once. */
-            private const val ICON_CACHE_SIZE = 250
-
             /** Alpha lost per row going down the Favorites section. */
             private const val FAVORITE_FADE_STEP = 0.15f
 
