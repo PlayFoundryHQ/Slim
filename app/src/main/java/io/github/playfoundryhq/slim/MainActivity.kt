@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.LauncherApps
 import android.graphics.Bitmap
 import android.os.BatteryManager
 import android.graphics.drawable.ColorDrawable
@@ -14,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.UserHandle
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.GestureDetector
@@ -79,7 +81,11 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     private lateinit var txtFocusClock: TextView
     private lateinit var txtFocusDate: TextView
     private lateinit var txtFocusNotif: TextView
-    private var packageChangeReceiver: BroadcastReceiver? = null
+    private val launcherApps by lazy { getSystemService(Context.LAUNCHER_APPS_SERVICE) as LauncherApps }
+    private var launcherAppsCallback: LauncherApps.Callback? = null
+    private val profileReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) = scheduleAppRefresh()
+    }
     private var batteryReceiver: BroadcastReceiver? = null
     private var batteryReceiverRegistered = false
     private lateinit var widgetHost: WidgetHostManager
@@ -138,7 +144,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
     // to throttle retries so a failing endpoint doesn't get hammered.
     private var lastWeatherAttemptTime = 0L
     // Last time onResume kicked a full app refresh. Package install/remove comes
-    // in through PackageChangeReceiver, so the only job of the onResume refresh
+    // in through the LauncherApps callback, so the only job of the onResume refresh
     // is to catch the rare case the broadcast was missed (Slim not registered
     // yet during a fast install). Doing the refresh + its two retries on every
     // single Home press was a LauncherApps query storm on the hot resume path.
@@ -394,11 +400,33 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
             }
         }
 
-        // Register for package install/remove broadcasts so newly installed
-        // apps appear immediately without waiting for the next onResume cycle.
-        val receiver = PackageChangeReceiver { scheduleAppRefresh() }
-        packageChangeReceiver = receiver
-        registerReceiver(receiver, PackageChangeReceiver.createIntentFilter())
+        // Package changes in ANY profile (installs, updates, removals, enable/
+        // disable, suspend) — the PACKAGE_* broadcasts only ever covered the
+        // personal profile. An update can change an app's icon, so its cached
+        // icons are dropped before the list refreshes.
+        val callback = object : LauncherApps.Callback() {
+            override fun onPackageAdded(packageName: String, user: UserHandle) = handlePackageChange(packageName)
+            override fun onPackageRemoved(packageName: String, user: UserHandle) = handlePackageChange(packageName)
+            override fun onPackageChanged(packageName: String, user: UserHandle) = handlePackageChange(packageName)
+            override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) =
+                packageNames.forEach { handlePackageChange(it) }
+            override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) =
+                packageNames.forEach { handlePackageChange(it) }
+            override fun onPackagesSuspended(packageNames: Array<out String>, user: UserHandle) =
+                packageNames.forEach { handlePackageChange(it) }
+            override fun onPackagesUnsuspended(packageNames: Array<out String>, user: UserHandle) =
+                packageNames.forEach { handlePackageChange(it) }
+        }
+        launcherAppsCallback = callback
+        launcherApps.registerCallback(callback, handler)
+        // Work profile switched on/off, unlocked, added or removed.
+        registerReceiver(profileReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_MANAGED_PROFILE_AVAILABLE)
+            addAction(Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE)
+            addAction(Intent.ACTION_MANAGED_PROFILE_UNLOCKED)
+            addAction(Intent.ACTION_MANAGED_PROFILE_ADDED)
+            addAction(Intent.ACTION_MANAGED_PROFILE_REMOVED)
+        })
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             val listener = WallpaperManager.OnColorsChangedListener { _, which ->
@@ -713,7 +741,7 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         searchAdapter.setShowIcons(prefs.showAppIcons)
         updateWeather()
         // Pick up newly installed/removed apps — with retry for timing (F-Droid etc.).
-        // Throttled: PackageChangeReceiver is the real-time path, this is only a
+        // Throttled: the LauncherApps callback is the real-time path, this is only a
         // safety net, so it need not fire on every Home press.
         val now = System.currentTimeMillis()
         if (now - lastResumeRefreshTime > RESUME_REFRESH_INTERVAL_MS) {
@@ -760,6 +788,12 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
      * Retries fire ONCE each (no infinite loop) to avoid spamming
      * notifyDataSetChanged and breaking swipe gestures.
      */
+    /** A package changed in some profile: drop its cached icons, then refresh the list. */
+    private fun handlePackageChange(packageName: String) {
+        iconLoader.evictPackage(packageName)
+        scheduleAppRefresh()
+    }
+
     private fun scheduleAppRefresh() {
         // A widget's provider app may have been updated or removed.
         widgetHost.markDirty()
@@ -1131,8 +1165,8 @@ class MainActivity : AppCompatActivity(), WaveGestureView.OnLetterSelectedListen
         handler.removeCallbacks(refreshRetry1)
         handler.removeCallbacks(refreshRetry2)
         NotificationRegistry.unregisterListener()
-        packageChangeReceiver?.let { runCatching { unregisterReceiver(it) } }
-        (packageChangeReceiver as? PackageChangeReceiver)?.destroy()
+        launcherAppsCallback?.let { runCatching { launcherApps.unregisterCallback(it) } }
+        runCatching { unregisterReceiver(profileReceiver) }
         if (batteryReceiverRegistered) batteryReceiver?.let { runCatching { unregisterReceiver(it) } }
         batteryReceiverRegistered = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {

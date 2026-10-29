@@ -26,16 +26,28 @@ class AppRepository(
         get() = context.getSystemService(Context.USER_SERVICE) as UserManager
 
     /**
-     * Discovers launchable apps across ALL user profiles (personal + work)
-     * and syncs the Room cache, removing entries for uninstalled apps.
+     * Discovers launchable apps across ALL user profiles (personal + work) and
+     * syncs the Room cache: new apps are added, renamed apps (an update or a
+     * device-language change) get their label refreshed, and uninstalled apps
+     * are dropped. Only the difference is written, so a refresh that finds
+     * nothing new doesn't make every list observer rebuild.
+     *
+     * A profile that's paused (work apps turned off) or still locked is skipped
+     * entirely — it reports no activities, and treating that as "uninstalled"
+     * used to wipe its favorites, hidden flags and renames.
      */
     suspend fun refreshApps() = withContext(ioDispatcher) {
         val myUserHandle = Process.myUserHandle()
         val discoveredApps = mutableListOf<AppItem>()
+        val skippedSerials = mutableSetOf<Long>()
 
         for (profile in launcherApps.profiles) {
             val serial = userManager.getSerialNumberForUser(profile)
             val isWork = profile != myUserHandle
+            if (isWork && !isProfileAvailable(profile)) {
+                skippedSerials += serial
+                continue
+            }
 
             for (activity in launcherApps.getActivityList(null, profile)) {
                 val packageName = activity.applicationInfo.packageName
@@ -53,11 +65,17 @@ class AppRepository(
             }
         }
 
-        if (discoveredApps.isNotEmpty()) {
-            appDao.insertApps(discoveredApps)
-            // Drop cache entries for apps/profiles that no longer exist
-            appDao.deleteStaleApps(discoveredApps.map { it.id })
-        }
+        // An empty result means LauncherApps had a hiccup, not that every app
+        // was uninstalled — never act on it.
+        if (discoveredApps.isEmpty()) return@withContext
+        val delta = AppSync.computeDelta(appDao.getAllAppsOnce(), discoveredApps, skippedSerials)
+        if (!delta.isEmpty) appDao.applyDelta(delta)
+    }
+
+    private fun isProfileAvailable(profile: android.os.UserHandle): Boolean {
+        return userManager.isUserRunning(profile) &&
+            userManager.isUserUnlocked(profile) &&
+            !userManager.isQuietModeEnabled(profile)
     }
 
     suspend fun setAppAsFavorite(id: String, isFavorite: Boolean) = withContext(ioDispatcher) {
@@ -82,10 +100,6 @@ class AppRepository(
 
     suspend fun recordAppLaunch(id: String) = withContext(ioDispatcher) {
         appDao.incrementLaunchCount(id, System.currentTimeMillis())
-    }
-
-    suspend fun handlePackageRemoved(packageName: String) = withContext(ioDispatcher) {
-        appDao.deletePackage(packageName)
     }
 
     /**
@@ -115,4 +129,39 @@ class AppRepository(
     /** Resolves the UserHandle for badging work-profile app icons. */
     fun getUserHandleForSerial(serial: Long) =
         userManager.getUserForSerialNumber(serial) ?: Process.myUserHandle()
+}
+
+/** Pure diffing between the cached app rows and a fresh LauncherApps scan. */
+object AppSync {
+
+    data class Delta(
+        val insert: List<AppItem>,
+        /** Existing rows whose app-provided label changed (carries the new label). */
+        val relabel: List<AppItem>,
+        val deleteIds: List<String>,
+    ) {
+        val isEmpty: Boolean get() = insert.isEmpty() && relabel.isEmpty() && deleteIds.isEmpty()
+    }
+
+    /**
+     * @param skippedSerials profiles that weren't scanned (paused / locked);
+     *   their cached rows are left exactly as they are.
+     */
+    fun computeDelta(
+        cached: List<AppItem>,
+        discovered: List<AppItem>,
+        skippedSerials: Set<Long> = emptySet(),
+    ): Delta {
+        val cachedById = cached.associateBy { it.id }
+        val discoveredIds = discovered.mapTo(HashSet()) { it.id }
+        val insert = discovered.filter { it.id !in cachedById }
+        val relabel = discovered.filter { found ->
+            val row = cachedById[found.id]
+            row != null && row.label != found.label
+        }
+        val deleteIds = cached
+            .filter { it.id !in discoveredIds && it.userSerial !in skippedSerials }
+            .map { it.id }
+        return Delta(insert, relabel, deleteIds)
+    }
 }

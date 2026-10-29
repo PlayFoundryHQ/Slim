@@ -7,44 +7,57 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Dao
-interface AppDao {
+abstract class AppDao {
     @Query("SELECT * FROM cached_apps WHERE isHidden = 0 ORDER BY label COLLATE NOCASE ASC")
-    fun getAllApps(): Flow<List<AppItem>>
+    abstract fun getAllApps(): Flow<List<AppItem>>
 
     @Query("SELECT * FROM cached_apps WHERE isFavorite = 1 AND isHidden = 0 ORDER BY label COLLATE NOCASE ASC")
-    fun getFavorites(): Flow<List<AppItem>>
+    abstract fun getFavorites(): Flow<List<AppItem>>
+
+    /** Every cached row, hidden ones included — the baseline a refresh diffs against. */
+    @Query("SELECT * FROM cached_apps")
+    abstract suspend fun getAllAppsOnce(): List<AppItem>
 
     @Query("SELECT * FROM cached_apps WHERE isHidden = 1 ORDER BY label COLLATE NOCASE ASC")
-    suspend fun getHiddenApps(): List<AppItem>
+    abstract suspend fun getHiddenApps(): List<AppItem>
 
     /** Apps with user customizations worth backing up. */
     @Query("SELECT * FROM cached_apps WHERE isFavorite = 1 OR isHidden = 1 OR customLabel IS NOT NULL")
-    suspend fun getCustomizedApps(): List<AppItem>
+    abstract suspend fun getCustomizedApps(): List<AppItem>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertApps(apps: List<AppItem>)
+    abstract suspend fun insertApps(apps: List<AppItem>)
 
     @Query("UPDATE cached_apps SET isFavorite = :isFav WHERE id = :id")
-    suspend fun setFavorite(id: String, isFav: Boolean)
+    abstract suspend fun setFavorite(id: String, isFav: Boolean)
 
     @Query("UPDATE cached_apps SET isHidden = :hidden WHERE id = :id")
-    suspend fun setHidden(id: String, hidden: Boolean)
+    abstract suspend fun setHidden(id: String, hidden: Boolean)
 
     @Query("UPDATE cached_apps SET customLabel = :label WHERE id = :id")
-    suspend fun setCustomLabel(id: String, label: String?)
+    abstract suspend fun setCustomLabel(id: String, label: String?)
+
+    /** The app's own label (not the user's rename) — refreshed after updates / locale changes. */
+    @Query("UPDATE cached_apps SET label = :label WHERE id = :id")
+    abstract suspend fun setLabel(id: String, label: String)
 
     @Query("UPDATE cached_apps SET launchCount = launchCount + 1, lastTimeUsed = :timestamp WHERE id = :id")
-    suspend fun incrementLaunchCount(id: String, timestamp: Long)
+    abstract suspend fun incrementLaunchCount(id: String, timestamp: Long)
 
-    @Query("DELETE FROM cached_apps WHERE packageName = :packageName")
-    suspend fun deletePackage(packageName: String)
+    @Query("DELETE FROM cached_apps WHERE id IN (:ids)")
+    abstract suspend fun deleteByIds(ids: List<String>)
 
-    /** Removes cache entries for apps that are no longer installed. */
-    @Query("DELETE FROM cached_apps WHERE id NOT IN (:validIds)")
-    suspend fun deleteStaleApps(validIds: List<String>)
-
-    @Query("SELECT COUNT(*) FROM cached_apps")
-    suspend fun getAppCount(): Int
+    /**
+     * Applies a refresh's changes in one transaction, so observers see a single
+     * update. Deletes are chunked to stay under SQLite's bound-variable limit
+     * (999 on older devices) — the old `NOT IN (:allIds)` query could exceed it.
+     */
+    @Transaction
+    open suspend fun applyDelta(delta: AppSync.Delta) {
+        if (delta.insert.isNotEmpty()) insertApps(delta.insert)
+        for (app in delta.relabel) setLabel(app.id, app.label)
+        delta.deleteIds.chunked(500).forEach { deleteByIds(it) }
+    }
 }
 
 @Database(entities = [AppItem::class], version = 2, exportSchema = false)
