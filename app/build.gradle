@@ -37,6 +37,14 @@ android {
     }
 
     buildTypes {
+        // Debug builds get their own package name, so they install next to the
+        // release (Cafe Bazaar / GitHub) launcher instead of over it. Two signing
+        // keys can never share one package name — that collision is what kept
+        // blocking release installs on the test phone.
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
         release {
             // Minification disabled until the app has been verified on-device
             // with R8 (Room/Material reflection can break silently when shrunk).

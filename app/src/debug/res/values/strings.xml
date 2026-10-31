@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds are a separate app (see applicationIdSuffix); label them so. -->
+<resources>
+    <string name="app_name">Slim (debug)</string>
+</resources>
